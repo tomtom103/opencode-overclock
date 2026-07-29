@@ -149,7 +149,7 @@ export function withBubble(frame: string, bubble: string | undefined): string {
 export function spriteFrame(species: Species, state: SpriteState, tick: number): string {
   const art = ART[species]
   const t = ((tick % 1000) + 1000) % 1000
-  const body = art.idle[t % 2]!
+  const body = art.idle[art.beat(t)]!
   const rest = art.idle[0]!
 
   switch (state) {

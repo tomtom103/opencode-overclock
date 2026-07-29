@@ -1,5 +1,5 @@
 import type { TuiPluginApi, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
-import { rollCompanion, describeCompanion } from "./companion.ts"
+import { rollCompanion, describeCompanion, migrateSpecies } from "./companion.ts"
 import type { Companion, Rarity } from "./types.ts"
 import { spriteFrame, withBubble, spriteHeight, SPRITE_WIDTH, type SpriteState } from "./sprites.ts"
 import { pickReaction, createReactionGate, type ReactionKind } from "./reactions.ts"
@@ -52,6 +52,17 @@ export async function registerBuddy(api: TuiPluginApi): Promise<void> {
     companion = rollCompanion()
     api.kv.set(KV_KEY, companion)
     api.ui.toast({ message: `a buddy hatched: ${describeCompanion(companion)}` })
+  } else {
+    // A companion persisted under a species we have since retired has no art:
+    // every lookup into ART would throw from inside the slot render, where the
+    // caller's try/catch can't reach, and the buddy would silently not paint.
+    // Write the migration back so it settles once instead of re-rolling per launch.
+    const migrated = migrateSpecies(companion)
+    if (migrated) {
+      companion = migrated
+      api.kv.set(KV_KEY, migrated)
+      api.ui.toast({ message: `${migrated.name} is a ${migrated.species} now` })
+    }
   }
   const hatched: Companion = companion
 

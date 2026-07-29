@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { mulberry32, rollCompanion, describeCompanion } from "../src/buddy/companion.ts"
-import { SPECIES } from "../src/buddy/types.ts"
+import { mulberry32, rollCompanion, describeCompanion, migrateSpecies } from "../src/buddy/companion.ts"
+import { SPECIES, type Companion, type Species } from "../src/buddy/types.ts"
 import {
   spriteFrame,
   withBubble,
@@ -54,6 +54,38 @@ describe("rollCompanion", () => {
   })
 })
 
+describe("migrateSpecies", () => {
+  /** A companion persisted before its species was retired from the sprite sheet. */
+  const retired = {
+    species: "dragon",
+    rarity: "legendary",
+    name: "Ember",
+    stats: { patience: 3, chaos: 9, wisdom: 4, snark: 7 },
+    hatchedAt: 1234,
+  } as unknown as Companion
+
+  test("a retired species moves onto one we still draw", () => {
+    const moved = migrateSpecies(retired, mulberry32(3))!
+    expect(moved).toBeDefined()
+    expect(SPECIES).toContain(moved.species)
+    expect(() => spriteFrame(moved.species, "idle", 0)).not.toThrow()
+  })
+
+  test("everything that isn't the drawing survives the move", () => {
+    const moved = migrateSpecies(retired, mulberry32(3))!
+    expect(moved.name).toBe("Ember")
+    expect(moved.rarity).toBe("legendary")
+    expect(moved.stats).toEqual({ patience: 3, chaos: 9, wisdom: 4, snark: 7 })
+    expect(moved.hatchedAt).toBe(1234)
+  })
+
+  test("a species we still draw is left alone", () => {
+    for (const species of SPECIES) {
+      expect(migrateSpecies({ ...retired, species })).toBeUndefined()
+    }
+  })
+})
+
 describe("spriteFrame", () => {
   test("frame size is constant per species and within budget, no template leftovers", () => {
     for (const species of SPECIES) {
@@ -89,6 +121,40 @@ describe("spriteFrame", () => {
 
   test("negative ticks do not crash", () => {
     expect(() => spriteFrame("cat", "idle", -3)).not.toThrow()
+  })
+
+  /**
+   * Share of idle ticks showing the fidget pose instead of the rest pose. Blink
+   * ticks are skipped so a change of eyes isn't counted as movement.
+   */
+  function fidgetRate(species: Species): number {
+    const counts = new Map<string, number>()
+    for (let tick = 0; tick < 700; tick++) {
+      if (tick % 7 === 6) continue
+      const frame = spriteFrame(species, "idle", tick)
+      counts.set(frame, (counts.get(frame) ?? 0) + 1)
+    }
+    const seen = [...counts.values()]
+    const total = seen.reduce((a, b) => a + b, 0)
+    return (total - Math.max(...seen)) / total
+  }
+
+  test("every species uses both of its poses", () => {
+    for (const species of SPECIES) {
+      const rate = fidgetRate(species)
+      expect(rate).toBeGreaterThan(0)
+      expect(rate).toBeLessThan(1)
+    }
+  })
+
+  test("cadence is per-species, not one shared strobe", () => {
+    // A rate near 0.5 everywhere means the pose is alternating every tick and
+    // each species' `beat` is being ignored.
+    expect(fidgetRate("cat")).toBeLessThan(0.2)
+    expect(fidgetRate("owl")).toBeLessThan(0.2)
+    expect(fidgetRate("bat")).toBeGreaterThan(0.4)
+    const rates = new Set(SPECIES.map((s) => fidgetRate(s).toFixed(2)))
+    expect(rates.size).toBeGreaterThan(2)
   })
 })
 
