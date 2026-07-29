@@ -125,6 +125,7 @@ const fmt = (t: TaskRecord) =>
 export const tasks: FeatureModule = {
   name: "tasks",
   defaultEnabled: true,
+  requires: ["session.promptAsync", "session.messages"],
   async init(ctx, options) {
     const logDir = await ensureStateDir(ctx.directory, "tasks")
     const killOnExit = options.killOnExit !== false

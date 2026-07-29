@@ -3,6 +3,7 @@ import { Cron } from "croner"
 import type { FeatureModule } from "../types.ts"
 import { ensureStateDir, readJson, writeJson } from "../lib/state.ts"
 import { inject, toast } from "../lib/inject.ts"
+import { createBusyTracker } from "../lib/busy.ts"
 
 const z = tool.schema
 
@@ -34,17 +35,25 @@ interface Schedule {
 export const sched: FeatureModule = {
   name: "sched",
   defaultEnabled: true,
-  async init(ctx, _options) {
+  requires: ["session.promptAsync", "session.messages", "session.create"],
+  async init(ctx, options) {
     const dir = await ensureStateDir(ctx.directory)
     const storePath = `${dir}/schedules.json`
     const schedules = new Map<string, Schedule>()
     const timers = new Map<string, Cron | ReturnType<typeof setInterval>>()
+    const skipIfBusy = options.skipIfBusy !== false
+    const busy = createBusyTracker()
 
     const persist = () => writeJson(storePath, [...schedules.values()])
 
     async function fire(s: Schedule) {
       try {
         if (s.target === "current") {
+          // target still chewing on previous turn -> skip this fire, no pileup
+          if (skipIfBusy && busy.isBusy(s.sessionID)) {
+            await toast(ctx.client, `schedule ${s.id} skipped (session busy)`, "info")
+            return
+          }
           const ok = await inject(ctx.client, s.sessionID, `[schedule ${s.id} fired]\n${s.prompt}`)
           if (!ok) await toast(ctx.client, `schedule ${s.id}: target session gone`, "warning")
         } else {
@@ -94,6 +103,7 @@ export const sched: FeatureModule = {
     }
 
     return {
+      event: async ({ event }) => busy.onEvent(event),
       dispose: async () => {
         for (const id of [...timers.keys()]) disarm(id)
       },

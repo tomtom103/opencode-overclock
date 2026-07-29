@@ -62,6 +62,27 @@ test/               bun test
 
 ```sh
 bun install
+bun test          # unit
 bun run check     # typecheck + format check
 bun run format
 ```
+
+### Live loop
+
+`.opencode/plugins/dev.ts` re-exports `src/index.ts` -> opencode session in this repo runs plugin from source.
+
+1. `opencode` here. Plugin live.
+2. Edit `src/`. No hot reload -> restart opencode.
+3. State inspect: `.opencode/overclock/` (gitignored).
+
+### Headless e2e
+
+```sh
+timeout 90 opencode run -m anthropic/claude-sonnet-5 "Use task_run to run 'echo hi' ..." < /dev/null
+```
+
+Gotchas:
+
+- `< /dev/null` required. Open stdin -> hang.
+- Dev build hang on exit AFTER work done -> wrap in `timeout`, judge by artifacts (`.opencode/overclock/`, log tails), not exit code.
+- Plugin stderr: `opencode run --print-logs` or `~/.local/share/opencode/log/`. Grep `[overclock]`.

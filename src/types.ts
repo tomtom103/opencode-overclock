@@ -15,5 +15,7 @@ export interface FeatureModule {
   name: string
   /** on by default? */
   defaultEnabled: boolean
+  /** SDK client surfaces (dot-paths) the module needs. Missing -> module skipped + warn. */
+  requires?: string[]
   init(ctx: PluginInput, options: Record<string, unknown>): Promise<Partial<Hooks>>
 }
