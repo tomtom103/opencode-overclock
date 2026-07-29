@@ -1,0 +1,32 @@
+{
+  "name": "opencode-overclock",
+  "version": "0.0.1",
+  "description": "Claude Code features backported to opencode. Modular, toggleable.",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "claude-code"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "check": "tsc --noEmit && prettier --check ."
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "prettier": "^3.9.6",
+    "typescript": "^5.7.0"
+  }
+}
