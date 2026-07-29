@@ -2,6 +2,10 @@ node_modules/
 *.log
 .opencode/overclock/
 .DS_Store
+.env
+.env.*
+coverage/
+*.tsbuildinfo
 
 # Superpowers
 docs/specs/

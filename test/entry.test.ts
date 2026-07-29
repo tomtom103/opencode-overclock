@@ -24,7 +24,8 @@ describe("Overclock entry", () => {
 
   test("degraded client (SDK drift) -> dependent features skipped, plugin survives", async () => {
     const hooks = await Overclock(ctx({ session: {} }))
-    expect(Object.keys(hooks.tool ?? {})).toEqual([])
+    // only modules with no `requires` (usage) survive a bare client
+    expect(Object.keys(hooks.tool ?? {})).toEqual(["usage_report"])
   })
 
   test("dispose runs clean on capable client", async () => {

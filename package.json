@@ -5,7 +5,9 @@
   "type": "module",
   "main": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./server": "./src/index.ts",
+    "./tui": "./src/tui.ts"
   },
   "files": [
     "src"
@@ -26,6 +28,9 @@
     "croner": "^10.0.1"
   },
   "devDependencies": {
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
     "@types/bun": "latest",
     "prettier": "^3.9.6",
     "typescript": "^5.7.0"
