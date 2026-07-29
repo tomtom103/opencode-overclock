@@ -10,6 +10,8 @@ export interface GuardHook {
   debounceMs: number
   timeoutMs: number
   onSuccess: "silent" | "notify"
+  /** inject mode: give up deferring past a busy session after this long, and report anyway. */
+  maxDeferMs: number
 }
 
 /** options.hooks -> validated GuardHook[]. Invalid entries -> console.warn, skipped, never throw. */
@@ -33,6 +35,7 @@ export function parseHooks(raw: unknown): GuardHook[] {
       debounceMs: typeof e.debounceMs === "number" ? e.debounceMs : 2000,
       timeoutMs: typeof e.timeoutMs === "number" ? e.timeoutMs : 60000,
       onSuccess: e.onSuccess === "notify" ? "notify" : "silent",
+      maxDeferMs: typeof e.maxDeferMs === "number" ? e.maxDeferMs : 300000,
     })
   }
   return hooks
@@ -85,12 +88,18 @@ interface HookState {
   lastToolName: string
   lastFilePath?: string
   procs: Set<Bun.Subprocess>
+  /** when the current run of deferrals started, for the maxDeferMs cap */
+  deferredSince?: number
+  /** last payload actually injected, to avoid re-reporting a standing failure */
+  lastInjectedPayload?: string
 }
 
 export interface GuardRunnerDeps {
   cwd: string
   onInject: (sessionID: string, payload: string) => Promise<void>
   onNotify: (hookName: string) => Promise<void>
+  /** omitted -> never busy, i.e. the old always-inject behaviour */
+  isBusy?: (sessionID: string) => boolean
 }
 
 export interface GuardRunner {
@@ -134,8 +143,20 @@ export function createGuardRunner(deps: GuardRunnerDeps): GuardRunner {
       s.timer = setTimeout(() => void fire(hook), hook.debounceMs)
       return
     }
-    s.running = true
     const sessionID = s.lastSessionID
+    // Agent still mid-turn: the tree is in flux, so any verdict we reach now may already be
+    // stale by the time it's read. Re-arm instead. The recheck doubles as dedup -- if the
+    // agent fixed the fault itself, the later run exits 0 and we stay silent.
+    if (sessionID && deps.isBusy?.(sessionID)) {
+      s.deferredSince ??= Date.now()
+      if (Date.now() - s.deferredSince < hook.maxDeferMs) {
+        s.timer = setTimeout(() => void fire(hook), hook.debounceMs)
+        return
+      }
+      // deferred too long -- session may be wedged. Report anyway rather than never.
+    }
+    s.deferredSince = undefined
+    s.running = true
     const toolName = s.lastToolName
     const filePath = s.lastFilePath
     try {
@@ -143,10 +164,18 @@ export function createGuardRunner(deps: GuardRunnerDeps): GuardRunner {
         s.procs.add(p),
       )
       if (result.code !== 0) {
-        if (sessionID)
-          await deps.onInject(sessionID, failurePayload(hook.name, result.code, result.combined))
-      } else if (hook.onSuccess === "notify") {
-        await deps.onNotify(hook.name)
+        const payload = failurePayload(hook.name, result.code, result.combined)
+        // Backstop to the idle gate above: a fault the agent can't fix would otherwise
+        // re-inject on every idle cycle forever. Report transitions, not standing state.
+        // Exact-match is deliberately conservative -- it only ever suppresses a report
+        // that is byte-identical to the one the agent has already seen and failed to clear.
+        if (sessionID && payload !== s.lastInjectedPayload) {
+          await deps.onInject(sessionID, payload)
+          s.lastInjectedPayload = payload
+        }
+      } else {
+        s.lastInjectedPayload = undefined
+        if (hook.onSuccess === "notify") await deps.onNotify(hook.name)
       }
     } finally {
       s.running = false
@@ -181,7 +210,10 @@ export function createGuardRunner(deps: GuardRunnerDeps): GuardRunner {
 /**
  * User-configurable post-tool hooks. Run commands after matching tool calls. No config -> inert.
  * "append": run synchronously, failure appended to tool output in place.
- * "inject" (default): debounced per hook name, failure injected as a user turn.
+ * "inject" (default): debounced per hook name, failure injected as a user turn once the
+ * session goes idle. Firing mid-turn doesn't interrupt (promptAsync queues), but each
+ * fire queues its own turn, so a burst of edits stacks several reports of a fault the
+ * agent was already fixing -- and reports it from a tree that was still being edited.
  */
 export const guard: FeatureModule = {
   name: "guard",
@@ -189,7 +221,7 @@ export const guard: FeatureModule = {
   options: { hooks: "array" },
   defaultEnabled: true,
   requires: ["session.promptAsync", "session.messages"],
-  async init(ctx, options) {
+  async init(ctx, options, shared) {
     if (options.hooks !== undefined && !Array.isArray(options.hooks)) {
       console.warn(`[overclock] guard: options.hooks must be an array, got ${typeof options.hooks}`)
     }
@@ -204,6 +236,7 @@ export const guard: FeatureModule = {
       onNotify: async (hookName) => {
         await toast(ctx.client, `guard "${hookName}" passed`, "success")
       },
+      isBusy: (sessionID) => shared.busy.isBusy(sessionID),
     })
 
     return {

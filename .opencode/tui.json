@@ -1,3 +1,6 @@
 {
-  "plugin": ["../src/tui.ts"]
+  "plugin": [
+    "../src/tui.ts",
+    "opencode-overclock"
+  ]
 }

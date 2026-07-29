@@ -1,4 +1,5 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import { registerBuddy } from "./buddy/tui.ts"
 
 const STATE_SUBDIR = ".opencode/overclock"
 
@@ -7,6 +8,23 @@ export interface TuiOptions {
   notifyPermission?: boolean
   notifyQuestion?: boolean
   notifyError?: boolean
+  buddy?: boolean
+}
+
+/**
+ * The buddy toggles from the same overclock.json as the server features, so one
+ * config file governs both surfaces. `features.buddy: false` disables; missing
+ * file or unreadable config = default on.
+ */
+export async function buddyEnabledInConfig(directory: string): Promise<boolean> {
+  try {
+    const file = Bun.file(`${directory}/.opencode/overclock.json`)
+    if (!(await file.exists())) return true
+    const config = (await file.json()) as { features?: Record<string, unknown> }
+    return config.features?.["buddy"] !== false
+  } catch {
+    return true
+  }
 }
 
 export interface TaskMirrorEntry {
@@ -221,6 +239,16 @@ const tui: TuiPlugin = async (api, options) => {
     if (unregister) api.lifecycle.onDispose(async () => unregister())
   } catch (e) {
     console.warn(`[overclock-tui] /oc-schedules command registration failed: ${e}`)
+  }
+
+  // ASCII pet beside the prompt. Anything here failing (missing @opentui/solid,
+  // slot API drift) must degrade to "no buddy", never take the notifications down.
+  try {
+    if (opts.buddy !== false && (await buddyEnabledInConfig(api.state.path.directory))) {
+      await registerBuddy(api)
+    }
+  } catch (e) {
+    console.warn(`[overclock-tui] buddy disabled: ${e}`)
   }
 }
 

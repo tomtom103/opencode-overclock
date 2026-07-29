@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { checkpoints, createCheckpoints } from "../src/features/checkpoints.ts"
+import { createBusyTracker } from "../src/lib/busy.ts"
+
+/** fresh per call: shared state must not leak between tests */
+const shared = () => ({ busy: createBusyTracker() })
 
 const user = (id: string, created: number, text?: string) => ({
   info: { id, role: "user", time: { created } },
@@ -160,6 +164,7 @@ describe("checkpoints module", () => {
     const hooks = await checkpoints.init(
       fakeCtx(mockClient({ messages: async () => ({ data: msgs }) })),
       {},
+      shared(),
     )
     const out = await hooks.tool!.checkpoint_list!.execute({}, { sessionID: "current-session" } as any)
     expect(out).toBe(`m1 ${new Date(1).toISOString()} hi`)
@@ -178,6 +183,7 @@ describe("checkpoints module", () => {
         }),
       ),
       {},
+      shared(),
     )
     const tctx = {
       sessionID: "s1",
@@ -205,6 +211,7 @@ describe("checkpoints module", () => {
         }),
       ),
       {},
+      shared(),
     )
     const tctx = {
       sessionID: "s1",
@@ -230,6 +237,7 @@ describe("checkpoints module", () => {
         }),
       ),
       {},
+      shared(),
     )
     const out = await hooks.tool!.checkpoint_restore!.execute({}, { sessionID: "s2" } as any)
     expect(sent).toEqual({ path: { id: "s2" } })

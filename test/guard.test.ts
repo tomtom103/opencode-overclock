@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
+import { cleanupTmp, tmpDir } from "./tmp.ts"
+import { createBusyTracker } from "../src/lib/busy.ts"
 import {
   createGuardRunner,
   failurePayload,
@@ -7,6 +9,11 @@ import {
   parseHooks,
   type GuardHook,
 } from "../src/features/guard.ts"
+
+afterAll(cleanupTmp)
+
+/** fresh per call: shared state must not leak between tests */
+const shared = () => ({ busy: createBusyTracker() })
 
 function makeHook(overrides: Partial<GuardHook> = {}): GuardHook {
   return {
@@ -17,6 +24,7 @@ function makeHook(overrides: Partial<GuardHook> = {}): GuardHook {
     debounceMs: 2000,
     timeoutMs: 60000,
     onSuccess: "silent",
+    maxDeferMs: 300000,
     ...overrides,
   }
 }
@@ -59,6 +67,7 @@ describe("parseHooks", () => {
       timeoutMs: 60000,
       onSuccess: "silent",
       pathFilter: undefined,
+      maxDeferMs: 300000,
     })
   })
 
@@ -73,6 +82,7 @@ describe("parseHooks", () => {
         debounceMs: 500,
         timeoutMs: 1000,
         onSuccess: "notify",
+        maxDeferMs: 9000,
       },
     ])
     expect(hooks[0]).toMatchObject({
@@ -81,6 +91,7 @@ describe("parseHooks", () => {
       debounceMs: 500,
       timeoutMs: 1000,
       onSuccess: "notify",
+      maxDeferMs: 9000,
     })
   })
 
@@ -193,6 +204,62 @@ describe("createGuardRunner: inject mode debounce", () => {
     expect(injections[0]?.payload).toContain('[guard "test" failed')
   })
 
+  test("repeated unresolved failure with same output injects only once", async () => {
+    const injections: string[] = []
+    const runner = createGuardRunner({
+      cwd: "/tmp",
+      onInject: async (_s, payload) => {
+        injections.push(payload)
+      },
+      onNotify: async () => {},
+    })
+    const hook = makeHook({ mode: "inject", run: 'bash -c "echo boom; exit 1"', debounceMs: 20 })
+
+    runner.triggerInject(hook, "s1", "edit", "a.ts")
+    await new Promise((r) => setTimeout(r, 60))
+    runner.triggerInject(hook, "s2", "edit", "a.ts")
+    await new Promise((r) => setTimeout(r, 60))
+    runner.triggerInject(hook, "s3", "edit", "a.ts")
+    await new Promise((r) => setTimeout(r, 60))
+
+    expect(injections).toHaveLength(1)
+  })
+
+  test("failure re-injects after an intervening success", async () => {
+    const injections: string[] = []
+    const runner = createGuardRunner({
+      cwd: "/tmp",
+      onInject: async (_s, payload) => {
+        injections.push(payload)
+      },
+      onNotify: async () => {},
+    })
+    const marker = `${tmpDir("guard")}/marker`
+    await Bun.write(marker, "fail")
+    const hook = makeHook({
+      mode: "inject",
+      run: `test "$(cat ${marker})" = pass`,
+      debounceMs: 20,
+    })
+
+    runner.triggerInject(hook, "s1", "edit", "a.ts")
+    await new Promise((r) => setTimeout(r, 70))
+    expect(injections).toHaveLength(1)
+
+    // fixed -> clears the dedup memory
+    await Bun.write(marker, "pass")
+    runner.triggerInject(hook, "s1", "edit", "a.ts")
+    await new Promise((r) => setTimeout(r, 70))
+    expect(injections).toHaveLength(1)
+
+    // breaks again with identical output -> must be reported afresh
+    await Bun.write(marker, "fail")
+    runner.triggerInject(hook, "s1", "edit", "a.ts")
+    await new Promise((r) => setTimeout(r, 70))
+    expect(injections).toHaveLength(2)
+    runner.dispose()
+  })
+
   test("no failure -> no injection; notify fires if configured", async () => {
     const injections: unknown[] = []
     let notified: string | undefined
@@ -212,6 +279,100 @@ describe("createGuardRunner: inject mode debounce", () => {
     expect(notified).toBe("test")
   })
 
+  test("busy session -> defers instead of injecting mid-turn", async () => {
+    const injections: unknown[] = []
+    let busy = true
+    const runner = createGuardRunner({
+      cwd: "/tmp",
+      onInject: async (_s, p) => {
+        injections.push(p)
+      },
+      onNotify: async () => {},
+      isBusy: () => busy,
+    })
+    const hook = makeHook({ mode: "inject", run: 'bash -c "echo boom; exit 1"', debounceMs: 20 })
+
+    runner.triggerInject(hook, "s1", "edit", undefined)
+    await new Promise((r) => setTimeout(r, 120))
+    expect(injections).toHaveLength(0) // still busy: held back
+
+    busy = false
+    await new Promise((r) => setTimeout(r, 150))
+    expect(injections).toHaveLength(1) // idle: reported once
+    runner.dispose()
+  })
+
+  test("fault fixed while busy -> recheck passes, nothing injected", async () => {
+    const injections: unknown[] = []
+    let busy = true
+    const runner = createGuardRunner({
+      cwd: "/tmp",
+      onInject: async (_s, p) => {
+        injections.push(p)
+      },
+      onNotify: async () => {},
+      isBusy: () => busy,
+    })
+    // exits nonzero only while the marker file says the fault is still present
+    const marker = `${tmpDir("guard")}/marker`
+    await Bun.write(marker, "broken")
+    const hook = makeHook({
+      mode: "inject",
+      run: `test "$(cat ${marker})" = fixed`,
+      debounceMs: 20,
+    })
+
+    runner.triggerInject(hook, "s1", "edit", undefined)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(injections).toHaveLength(0)
+
+    // agent fixes it before going idle -- the deferred recheck should now pass
+    await Bun.write(marker, "fixed")
+    busy = false
+    await new Promise((r) => setTimeout(r, 150))
+    expect(injections).toHaveLength(0)
+    runner.dispose()
+  })
+
+  test("maxDeferMs exceeded -> reports anyway on a permanently busy session", async () => {
+    const injections: unknown[] = []
+    const runner = createGuardRunner({
+      cwd: "/tmp",
+      onInject: async (_s, p) => {
+        injections.push(p)
+      },
+      onNotify: async () => {},
+      isBusy: () => true,
+    })
+    const hook = makeHook({
+      mode: "inject",
+      run: 'bash -c "echo boom; exit 1"',
+      debounceMs: 20,
+      maxDeferMs: 50,
+    })
+
+    runner.triggerInject(hook, "s1", "edit", undefined)
+    await new Promise((r) => setTimeout(r, 250))
+    expect(injections).toHaveLength(1)
+    runner.dispose()
+  })
+
+  test("no isBusy dep -> injects as before", async () => {
+    const injections: unknown[] = []
+    const runner = createGuardRunner({
+      cwd: "/tmp",
+      onInject: async (_s, p) => {
+        injections.push(p)
+      },
+      onNotify: async () => {},
+    })
+    const hook = makeHook({ mode: "inject", run: 'bash -c "echo boom; exit 1"', debounceMs: 20 })
+    runner.triggerInject(hook, "s1", "edit", undefined)
+    await new Promise((r) => setTimeout(r, 120))
+    expect(injections).toHaveLength(1)
+    runner.dispose()
+  })
+
   test("trigger while running re-arms instead of running concurrently", async () => {
     const injections: { sessionID: string }[] = []
     const runner = createGuardRunner({
@@ -221,7 +382,14 @@ describe("createGuardRunner: inject mode debounce", () => {
       },
       onNotify: async () => {},
     })
-    const hook = makeHook({ mode: "inject", run: 'bash -c "sleep 0.1; exit 1"', debounceMs: 30 })
+    // distinct output per run, so the two reports aren't collapsed by same-failure dedup
+    // and the injection count still witnesses "the second run happened, serially"
+    const marker = `${tmpDir("guard")}/marker`
+    const hook = makeHook({
+      mode: "inject",
+      run: `sleep 0.1; echo run >> ${marker}; wc -l < ${marker}; exit 1`,
+      debounceMs: 30,
+    })
 
     runner.triggerInject(hook, "s1", "edit", undefined)
     // fires mid-first-run (first run starts ~30ms, takes ~100ms) -> should re-arm, not run concurrently
@@ -258,27 +426,31 @@ describe("guard module", () => {
   })
 
   test("inert (no tool.execute.after hook) when options.hooks missing", async () => {
-    const result = await guard.init(fakeCtx(), {})
+    const result = await guard.init(fakeCtx(), {}, shared())
     expect(result["tool.execute.after"]).toBeUndefined()
     expect(result.dispose).toBeUndefined()
   })
 
   test("inert when options.hooks is empty", async () => {
-    const result = await guard.init(fakeCtx(), { hooks: [] })
+    const result = await guard.init(fakeCtx(), { hooks: [] }, shared())
     expect(result["tool.execute.after"]).toBeUndefined()
   })
 
   test("append mode mutates output.output in place on failure", async () => {
-    const result = await guard.init(fakeCtx(), {
-      hooks: [
-        {
-          name: "tc",
-          tools: ["edit"],
-          run: 'bash -c "echo boom; exit 1"',
-          mode: "append",
-        },
-      ],
-    })
+    const result = await guard.init(
+      fakeCtx(),
+      {
+        hooks: [
+          {
+            name: "tc",
+            tools: ["edit"],
+            run: 'bash -c "echo boom; exit 1"',
+            mode: "append",
+          },
+        ],
+      },
+      shared(),
+    )
     const after = result["tool.execute.after"]!
     const output = { title: "t", output: "orig", metadata: {} }
     await after({ tool: "edit", sessionID: "s1", callID: "c1", args: { filePath: "a.ts" } }, output)
@@ -288,19 +460,75 @@ describe("guard module", () => {
   })
 
   test("append mode leaves output.output untouched when not a string", async () => {
-    const result = await guard.init(fakeCtx(), {
-      hooks: [{ name: "tc", tools: ["edit"], run: "exit 1", mode: "append" }],
-    })
+    const result = await guard.init(
+      fakeCtx(),
+      {
+        hooks: [{ name: "tc", tools: ["edit"], run: "exit 1", mode: "append" }],
+      },
+      shared(),
+    )
     const after = result["tool.execute.after"]!
     const output = { title: "t", output: undefined as unknown as string, metadata: {} }
     await after({ tool: "edit", sessionID: "s1", callID: "c1", args: {} }, output)
     expect(output.output).toBeUndefined()
   })
 
-  test("non-matching tool -> no mutation", async () => {
-    const result = await guard.init(fakeCtx(), {
-      hooks: [{ name: "tc", tools: ["edit"], run: "exit 1", mode: "append" }],
+  test("defers on the shared tracker's busy state; the entry owns the subscription", async () => {
+    const injected: string[] = []
+    const ctx = fakeCtx({
+      client: {
+        session: {
+          messages: async () => ({ data: [] }),
+          promptAsync: async (req: any) => {
+            injected.push(req.body.parts[0].text)
+            return {}
+          },
+        },
+        tui: { showToast: async () => ({}) },
+      },
     })
+    const state = shared()
+    const result = await guard.init(
+      ctx,
+      {
+        hooks: [{ name: "tc", tools: ["edit"], run: "exit 1", debounceMs: 20 }],
+      },
+      state,
+    )
+
+    // guard subscribes to nothing itself -- src/index.ts feeds the one tracker
+    expect(result.event).toBeUndefined()
+
+    await state.busy.onEvent({
+      type: "session.status",
+      properties: { sessionID: "s1", status: { type: "busy" } },
+    } as any)
+
+    const after = result["tool.execute.after"]!
+    const output = { title: "t", output: "orig", metadata: {} }
+    await after({ tool: "edit", sessionID: "s1", callID: "c1", args: { filePath: "a.ts" } }, output)
+
+    await Bun.sleep(120)
+    expect(injected).toEqual([])
+
+    await state.busy.onEvent({
+      type: "session.status",
+      properties: { sessionID: "s1", status: { type: "idle" } },
+    } as any)
+
+    await Bun.sleep(120)
+    expect(injected.length).toBe(1)
+    await result.dispose?.()
+  })
+
+  test("non-matching tool -> no mutation", async () => {
+    const result = await guard.init(
+      fakeCtx(),
+      {
+        hooks: [{ name: "tc", tools: ["edit"], run: "exit 1", mode: "append" }],
+      },
+      shared(),
+    )
     const after = result["tool.execute.after"]!
     const output = { title: "t", output: "orig", metadata: {} }
     await after({ tool: "bash", sessionID: "s1", callID: "c1", args: {} }, output)

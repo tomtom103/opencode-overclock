@@ -1,4 +1,15 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
+import type { BusyTracker } from "./lib/busy.ts"
+
+/**
+ * Singletons built once by the entry and handed to every module.
+ * Derived from the event bus, so they must have exactly one subscription -- a per-module
+ * copy would be N subscriptions maintaining N identical copies of the same state.
+ */
+export interface SharedDeps {
+  /** live per-session busy/idle state; the entry owns the subscription that feeds it */
+  busy: BusyTracker
+}
 
 /** Per-feature config from .opencode/overclock.json. `false` = off, object = options. */
 export type FeatureConfig = boolean | Record<string, unknown>
@@ -24,5 +35,5 @@ export interface FeatureModule {
   tools?: string[]
   /** Accepted option keys -> expected type. Anything else in config is a typo. */
   options?: Record<string, OptionType>
-  init(ctx: PluginInput, options: Record<string, unknown>): Promise<Partial<Hooks>>
+  init(ctx: PluginInput, options: Record<string, unknown>, shared: SharedDeps): Promise<Partial<Hooks>>
 }

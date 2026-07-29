@@ -1,4 +1,4 @@
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Hooks, Plugin } from "@opencode-ai/plugin"
 import { features } from "./features/index.ts"
 import { loadConfig } from "./config.ts"
 import { mergeHooks } from "./merge.ts"
@@ -6,7 +6,8 @@ import { missingSurfaces } from "./lib/probe.ts"
 import { toast } from "./lib/inject.ts"
 import { firstRun } from "./lib/state.ts"
 import { validateConfig, summarise } from "./validate.ts"
-import type { FeatureModule } from "./types.ts"
+import { createBusyTracker } from "./lib/busy.ts"
+import type { FeatureModule, SharedDeps } from "./types.ts"
 
 /**
  * Entry. Load config -> probe surfaces -> init enabled modules -> merge hooks.
@@ -30,7 +31,9 @@ export const Overclock: Plugin = async (ctx) => {
     )
   }
 
-  const parts = []
+  const shared: SharedDeps = { busy: createBusyTracker() }
+  // First part, so the tracker is current before any module's own event hook reads it.
+  const parts: Partial<Hooks>[] = [{ event: async ({ event }) => shared.busy.onEvent(event) }]
   const skipped: string[] = []
   const enabled: FeatureModule[] = []
 
@@ -47,7 +50,7 @@ export const Overclock: Plugin = async (ctx) => {
     }
     const options = typeof setting === "object" ? setting : {}
     try {
-      parts.push(await feature.init(ctx, options))
+      parts.push(await feature.init(ctx, options, shared))
       enabled.push(feature)
     } catch (e) {
       console.warn(`[overclock] feature ${feature.name} failed init: ${e}`)

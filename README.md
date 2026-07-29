@@ -52,6 +52,12 @@ run the default. Bad config never takes the plugin down; it falls back to defaul
 | `sandbox`              | `net` bool                                                                                      |
 | `guard`                | `hooks` array                                                                                   |
 | `usage`, `checkpoints` | —                                                                                               |
+| `buddy`                | — (TUI surface; `features.buddy: false` hides it)                                               |
+
+Each `guard` hook takes `name` · `tools` (array) · `run` — plus optional `pathFilter` (glob),
+`mode` (`inject` default, or `append`), `debounceMs` (2000), `timeoutMs` (60000), `onSuccess`
+(`silent`/`notify`), and `maxDeferMs` (300000 — how long `inject` waits for an idle session
+before reporting anyway).
 
 On a project's first run, overclock reports what it added. Worth knowing that installing it
 grants the agent **background shell execution** (`task_run`) and **recurring scheduling**
@@ -59,16 +65,17 @@ grants the agent **background shell execution** (`task_run`) and **recurring sch
 
 ## Features
 
-| Module        | Tools                                                      | Does                                                                                                         |
-| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `tasks`       | `task_run` `task_status` `task_output` `task_kill`         | background shell cmds; exit -> result posted back into session; stall watchdog nudges on interactive prompts |
-| `sched`       | `schedule_create` `schedule_list` `schedule_delete`        | cron exprs or intervals ("5m"); interval + current session = loop; restart-safe                              |
-| `sandbox`     | `bash_unsandboxed` (escape hatch)                          | bwrap-wrap every bash call: `/` ro, project + `/tmp` rw, net configurable. Opt-in                            |
-| `guard`       | —                                                          | user hooks: after matching tool calls, run configured cmds (debounced), failures fed back to model           |
-| `usage`       | `usage_report`                                             | per-day + per-session cost/token telemetry off `message.updated` events                                      |
-| `checkpoints` | `checkpoint_list` `checkpoint_revert` `checkpoint_restore` | session revert/unrevert over opencode's shadow-git snapshots; revert gated by permission ask                 |
+| Module        | Tools                                                      | Does                                                                                                                      |
+| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `tasks`       | `task_run` `task_status` `task_output` `task_kill`         | background shell cmds; exit -> result posted back into session; stall watchdog nudges on interactive prompts              |
+| `sched`       | `schedule_create` `schedule_list` `schedule_delete`        | cron exprs or intervals ("5m"); interval + current session = loop; restart-safe                                           |
+| `sandbox`     | `bash_unsandboxed` (escape hatch)                          | bwrap-wrap every bash call: `/` ro, project + `/tmp` rw, net configurable. Opt-in                                         |
+| `guard`       | —                                                          | user hooks: after matching tool calls, run configured cmds (debounced), failures fed back to model once the session idles |
+| `usage`       | `usage_report`                                             | per-day + per-session cost/token telemetry off `message.updated` events                                                   |
+| `checkpoints` | `checkpoint_list` `checkpoint_revert` `checkpoint_restore` | session revert/unrevert over opencode's shadow-git snapshots; revert gated by permission ask                              |
+| `buddy`       | —                                                          | ASCII pet beside the prompt (TUI): hatches once per install, idles/blinks, reacts to session events; `/oc-buddy` pets it  |
 
-TUI plugin (`src/tui.ts`, separate surface): OS notifications on idle/permission/question/error via `attention.notify`, slash commands for tasks/usage/schedules off the `.opencode/overclock/` state mirrors.
+TUI plugin (`src/tui.ts`, separate surface): OS notifications on idle/permission/question/error via `attention.notify`, slash commands for tasks/usage/schedules off the `.opencode/overclock/` state mirrors, and the buddy (`src/buddy/`) in the prompt-right slots. The buddy rolls species/rarity/name/stats once (persisted in TUI kv), hides below 100 columns, and needs `@opentui/solid` resolvable at runtime -- if it isn't, the buddy silently sits this one out while the rest of the TUI plugin loads.
 
 ## Layout
 
@@ -122,6 +129,11 @@ proves an installed-from-npm session actually gets the tools; run it after every
 1. `opencode` here. Plugin live.
 2. Edit `src/`. No hot reload -> restart opencode.
 3. State inspect: `.opencode/overclock/` (gitignored).
+
+Gotcha: if `~/.config/opencode/tui.json` also loads `opencode-overclock` from npm, that copy
+wins the `overclock-tui` id and the local dev TUI plugin (and any unpublished feature, e.g.
+the buddy) silently never loads. Remove the global entry while developing, or run with
+`XDG_CONFIG_HOME` pointed elsewhere.
 
 ### Headless e2e
 
