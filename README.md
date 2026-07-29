@@ -49,7 +49,6 @@ src/
 
 ## Docs
 
-- [docs/roadmap.md](docs/roadmap.md) — planned features
 - [docs/cc-opencode-map.md](docs/cc-opencode-map.md) — Claude Code hook <-> opencode hook mapping (research)
 
 ## Dev
