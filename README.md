@@ -1,16 +1,26 @@
 # opencode-overclock
 
-Power-ups for [opencode](https://opencode.ai). Features other harnesses have, opencode doesn't — plus ones nobody has yet. Each = module, toggleable. Module dies when opencode ships native equal/better.
+Power-ups for [opencode](https://opencode.ai). Background tasks, scheduling, sandboxed bash, tool hooks, usage telemetry, checkpoints. Each = module, toggleable. Module dies when opencode ships native equal/better.
 
 ## Install
 
-npm (opencode.json):
+```sh
+opencode plugin opencode-overclock       # this project
+opencode plugin -g opencode-overclock    # global
+```
 
-```json
+Requires opencode >= 1.18.9.
+
+One package, two surfaces: the **server** plugin (tools + hooks) and the **TUI** plugin (notifications + slash commands). They register in _separate_ config files, so use the command above rather than editing config by hand — it writes both:
+
+```jsonc
+// opencode.json  -> server surface
+{ "plugin": ["opencode-overclock"] }
+// tui.json       -> TUI surface  (omit this and notifications/slash commands silently never load)
 { "plugin": ["opencode-overclock"] }
 ```
 
-Local dev: symlink or copy into `.opencode/plugins/`.
+Local dev: copy or symlink into `.opencode/plugins/` — see [Dev](#dev). Note that a plugin _path_ only works there; `plugin` array entries resolve by npm name from the registry, and an unpublished name fails silently.
 
 ## Config
 
@@ -38,7 +48,7 @@ Local dev: symlink or copy into `.opencode/plugins/`.
 | `tasks`       | `task_run` `task_status` `task_output` `task_kill`         | background shell cmds; exit -> result posted back into session; stall watchdog nudges on interactive prompts |
 | `sched`       | `schedule_create` `schedule_list` `schedule_delete`        | cron exprs or intervals ("5m"); interval + current session = loop; restart-safe                              |
 | `sandbox`     | `bash_unsandboxed` (escape hatch)                          | bwrap-wrap every bash call: `/` ro, project + `/tmp` rw, net configurable. Opt-in                            |
-| `guard`       | —                                                          | CC-style user hooks: after matching tool calls, run configured cmds (debounced), failures fed back to model  |
+| `guard`       | —                                                          | user hooks: after matching tool calls, run configured cmds (debounced), failures fed back to model           |
 | `usage`       | `usage_report`                                             | per-day + per-session cost/token telemetry off `message.updated` events                                      |
 | `checkpoints` | `checkpoint_list` `checkpoint_revert` `checkpoint_restore` | session revert/unrevert over opencode's shadow-git snapshots; revert gated by permission ask                 |
 
@@ -65,7 +75,7 @@ test/               bun test
 
 ## Docs
 
-- [docs/cc-opencode-map.md](docs/cc-opencode-map.md) — Claude Code hook <-> opencode hook mapping (research)
+- [docs/opencode-plugin-surface.md](docs/opencode-plugin-surface.md) — opencode plugin/hook/event surface map + upstream drift watchlist (research)
 
 ## Dev
 
@@ -74,7 +84,20 @@ bun install
 bun test          # unit
 bun run check     # typecheck + format check
 bun run format
+bun run verify    # packaging: tarball contents, server+tui targets, manifest metadata
 ```
+
+### Release
+
+```sh
+bun run check && bun test && bun run verify
+npm publish
+bun run verify:published    # runtime load, by name, from the registry
+```
+
+`verify` cannot exercise the runtime load path — opencode resolves `plugin` entries by npm
+name from the registry, and a miss is silent. `verify:published` is the only check that
+proves an installed-from-npm session actually gets the tools; run it after every publish.
 
 ### Live loop
 

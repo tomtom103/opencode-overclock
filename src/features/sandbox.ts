@@ -46,7 +46,7 @@ export function probeBwrap(): boolean {
 }
 
 /**
- * Sandboxed bash (CC sandbox parity, via bubblewrap). Rewrites every bash tool call.
+ * Sandboxed bash via bubblewrap. Rewrites every bash tool call.
  * Off by default. No bwrap -> warn once, passthrough.
  */
 export const sandbox: FeatureModule = {

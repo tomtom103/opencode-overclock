@@ -1,4 +1,4 @@
-# CC <-> opencode hook map
+# Opencode Plugin Surface Exploration
 
 Validated against `anomalyco/opencode` @ `8cbea4f` (2026-07-29, `@opencode-ai/plugin@1.18.9` = npm `latest`).
 
@@ -117,7 +117,10 @@ Types-only in `@opencode-ai/plugin/v2/{effect,promise}` (promise = thin adapter 
 ## Plugin loading (v1)
 
 - Discovery: `plugin` config array (string or `[spec, options]`; relative specs resolve against the declaring config file) + auto-glob `{plugin,plugins}/*.{ts,js}` in every config dir (`~/.config/opencode`, each `.opencode` cwd->worktree, `~/.opencode`, `OPENCODE_CONFIG_DIR`).
-- npm specs: installed to `~/.cache/opencode/node_modules`, bare name -> `@latest`, `engines.opencode` semver-gated, dedupe last-declaration-wins by package name (version-insensitive). Entrypoint: `exports["./server"]`, then `main`.
+- npm specs: installed to `~/.cache/opencode/packages/<spec>/node_modules/` (one npm project per spec, **not** a flat `~/.cache/opencode/node_modules` — corrected empirically 2026-07-29), bare name -> `@latest`, `engines.opencode` semver-gated, dedupe last-declaration-wins by package name (version-insensitive). Entrypoint: `exports["./server"]`, then `main`.
+- **`plugin` entries resolve by npm name from the public registry only.** A directory path, a `.tgz` path, a path to `src/index.ts`, and a copy pre-installed into `.opencode/node_modules` are all ignored by the runtime loader. Local code loads only via the auto-glob (`{plugin,plugins}/*.{ts,js}`). Verified 2026-07-29 on 1.18.9.
+- **A registry miss is silent.** Unknown name -> cache dir created, `npm install` 404s, plugin skipped, nothing logged at any level. Symptom is only the absence of the plugin's tools. Corollary: the runtime load path cannot be tested before publishing (`scripts/verify-pack.sh --published` covers it after).
+- Manifest target detection (`opencode plugin <dir>`) reports `Detected server + tui targets` and writes **two** config entries: `opencode.json` (server) and `tui.json` (TUI). An `opencode.json` entry alone loads only the server half.
 - Module shapes: modern `export default { id?, server }`; legacy: every named export treated as a plugin fn. File plugins must export `id`.
 - Kill switches: `OPENCODE_PURE` (no external plugins), `OPENCODE_DISABLE_DEFAULT_PLUGINS` (no built-ins: codex/copilot/gitlab/poe/cloudflare/azure/digitalocean/snowflake/xai auth plugins).
 

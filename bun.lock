@@ -5,13 +5,10 @@
     "": {
       "name": "opencode-cc-backports",
       "dependencies": {
-        "@opencode-ai/plugin": "latest",
+        "@opencode-ai/plugin": "1.18.9",
         "croner": "^10.0.1",
       },
       "devDependencies": {
-        "@opentui/core": "0.4.5",
-        "@opentui/keymap": "0.4.5",
-        "@opentui/solid": "0.4.5",
         "@types/bun": "latest",
         "prettier": "^3.9.6",
         "typescript": "^5.7.0",

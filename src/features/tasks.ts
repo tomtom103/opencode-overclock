@@ -232,7 +232,7 @@ const fmt = (t: TaskRecord) =>
 
 /**
  * Background tasks: spawn shell cmds that outlive the turn.
- * Exit -> result injected back into spawning session (CC run_in_background parity).
+ * Exit -> result injected back into spawning session.
  */
 export const tasks: FeatureModule = {
   name: "tasks",

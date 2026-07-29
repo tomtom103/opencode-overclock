@@ -179,7 +179,7 @@ export function createGuardRunner(deps: GuardRunnerDeps): GuardRunner {
 }
 
 /**
- * User-configurable post-tool hooks (CC PostToolUse parity). No config -> inert.
+ * User-configurable post-tool hooks. Run commands after matching tool calls. No config -> inert.
  * "append": run synchronously, failure appended to tool output in place.
  * "inject" (default): debounced per hook name, failure injected as a user turn.
  */

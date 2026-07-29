@@ -8,7 +8,7 @@ export interface OverclockConfig {
 }
 
 /**
- * One backported CC feature = one module.
+ * One feature = one module.
  * init returns partial Hooks. Same hook from many modules -> composed in registry order.
  */
 export interface FeatureModule {
