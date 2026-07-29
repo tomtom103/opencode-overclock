@@ -1,8 +1,7 @@
 import type { FeatureModule } from "../types.ts"
-import { hello } from "./hello.ts"
+import { tasks } from "./tasks.ts"
+import { sched } from "./sched.ts"
+import { sandbox } from "./sandbox.ts"
 
-/**
- * Registry, ordered. Order = hook composition order.
- * Planned (see docs/roadmap.md): cc-hooks, stop-loop, claude-dir, memory, permission-rules.
- */
-export const features: FeatureModule[] = [hello]
+/** Registry, ordered. Order = hook composition order. */
+export const features: FeatureModule[] = [tasks, sched, sandbox]

@@ -19,14 +19,22 @@ Local dev: symlink or copy into `.opencode/plugins/`.
 ```json
 {
   "features": {
-    "hello": true,
-    "some-feature": { "option": "value" },
-    "other-feature": false
+    "tasks": true,
+    "sched": true,
+    "sandbox": { "net": false }
   }
 }
 ```
 
-`true`/`false` toggle. Object = on + options.
+`true`/`false` toggle. Object = on + options. Defaults: tasks + sched on, sandbox off.
+
+## Features
+
+| Module    | Tools                                               | Does                                                                              |
+| --------- | --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `tasks`   | `task_run` `task_status` `task_output` `task_kill`  | background shell cmds; exit -> result posted back into session                    |
+| `sched`   | `schedule_create` `schedule_list` `schedule_delete` | cron exprs or intervals ("5m"); interval + current session = loop; restart-safe   |
+| `sandbox` | `bash_unsandboxed` (escape hatch)                   | bwrap-wrap every bash call: `/` ro, project + `/tmp` rw, net configurable. Opt-in |
 
 ## Layout
 
@@ -36,16 +44,15 @@ src/
   types.ts          FeatureModule contract
   config.ts         config loader
   merge.ts          hook composition (many modules, same hook -> sequential)
-  features/
-    index.ts        registry (order = hook call order)
-    hello.ts        demo module, delete when real one lands
+  lib/              state dir + json, session inject + toast
+  features/         one file per module + registry
+test/               bun test
 ```
 
 ## Add feature
 
 1. `src/features/<name>.ts`, export `FeatureModule`
 2. Register in `src/features/index.ts`
-3. Doc one line in `docs/roadmap.md`
 
 ## Docs
 
