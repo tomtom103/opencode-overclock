@@ -1,4 +1,14 @@
-export const SPECIES = ["cat", "dog", "dragon", "ghost", "slime"] as const
+export const SPECIES = [
+  "cat",
+  "dog",
+  "bunny",
+  "owl",
+  "bat",
+  "penguin",
+  "duck",
+  "ghost",
+  "slime",
+] as const
 export type Species = (typeof SPECIES)[number]
 
 export type Rarity = "common" | "uncommon" | "rare" | "legendary"

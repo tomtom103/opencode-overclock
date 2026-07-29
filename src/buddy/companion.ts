@@ -54,6 +54,17 @@ function rollStat(rng: () => number): number {
   return 1 + Math.floor(rng() * 10)
 }
 
+/**
+ * Companions persist in TUI kv and outlive the sprite sheet, so an install that
+ * hatched a species we have since retired would look it up and find no art. Move
+ * it onto a species we still draw, keeping the identity that isn't the drawing:
+ * same name, rarity, stats and hatch date. Returns undefined when nothing to do.
+ */
+export function migrateSpecies(c: Companion, rng: () => number = Math.random): Companion | undefined {
+  if ((SPECIES as readonly string[]).includes(c.species)) return undefined
+  return { ...c, species: pick(rng, SPECIES) }
+}
+
 /** One-line card for the /oc-buddy toast. */
 export function describeCompanion(c: Companion): string {
   const s = c.stats

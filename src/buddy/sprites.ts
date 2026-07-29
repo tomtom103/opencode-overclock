@@ -30,40 +30,94 @@ const EYES = {
 } as const
 
 interface SpeciesArt {
-  /** Two body frames, alternated while idle: tail flick, ear twitch, wing flap... */
+  /** Rest pose + fidget pose: tail flick, ear twitch, wing beat... */
   idle: [string[], string[]]
+  /**
+   * Which of the two poses a tick shows. Per-species on purpose: alternating
+   * every tick reads as a strobe, and it makes every species move alike. A cat
+   * flicks its tail rarely, a dog wags nonstop, a dragon's wingbeat is slow and
+   * held at the top, a ghost never quite lands.
+   */
+  beat: (t: number) => 0 | 1
+}
+
+/** Fidget pose for `hold` ticks out of every `period`; rest pose otherwise. */
+function pulse(period: number, hold = 1): (t: number) => 0 | 1 {
+  return (t) => (t % period < hold ? 1 : 0)
 }
 
 const ART: Record<Species, SpeciesArt> = {
+  // tail flick: rare, one tick, then dead still again
   cat: {
     idle: [
-      [" /\\_/\\", "( {E} )", " > ^ <"],
-      [" /\\_/\\", "( {E} )", " > ^ <~"],
+      ["  /\\_/\\", " ( {E} )", "  > ^ <"],
+      ["  /\\_/\\", " ( {E} )", "  > ^ <~"],
     ],
+    beat: pulse(9),
   },
+  // ear perk: a quick double twitch, then a long settle
   dog: {
     idle: [
-      [" /^-^\\", "( {E} )", "/  ~  \\"],
-      [" /^-^/", "( {E} )", "/  ~  \\"],
+      ["  ,---,", " /({E})\\", " (__U__)"],
+      ["  ,---,", " /({E})/", " (__U__)"],
     ],
+    beat: (t) => (t % 7 === 0 || t % 7 === 2 ? 1 : 0),
   },
-  dragon: {
+  // ear wiggle: twitchier than the dog, never for long
+  bunny: {
     idle: [
-      ["  /\\~/\\", " ( {E} )", "<(  v  )>"],
-      ["  /\\~/\\", " ( {E} )", "^(  v  )^"],
+      ["  (\\_/)", "  ({E})", ' (")_(")'],
+      ["  (/_\\)", "  ({E})", ' (")_(")'],
     ],
+    beat: (t) => (t % 11 === 0 || t % 11 === 2 ? 1 : 0),
   },
+  // feather ruffle: an owl mostly just sits there
+  owl: {
+    idle: [
+      ["   ,_,", "  ({E})", "  {`\"'}"],
+      ["   ,_,", "  ({E})", "  {'\"`}"],
+    ],
+    beat: pulse(13),
+  },
+  // wing beat: fast, never stops fluttering
+  bat: {
+    idle: [
+      [" /^\\_/^\\", " <({E})>", "   \\v/"],
+      [" /^\\_/^\\", " ^({E})^", "   \\v/"],
+    ],
+    beat: pulse(2),
+  },
+  // waddle: a slow rock, feet turning in and out
+  penguin: {
+    idle: [
+      ["  ({E})", " <|_v_|>", "  _/ \\_"],
+      ["  ({E})", " <|_v_|>", "  _\\ /_"],
+    ],
+    beat: pulse(6, 3),
+  },
+  // ripples: spreading out, then settling
+  duck: {
+    idle: [
+      ["   ,-,", "  ({E})>", "  ~\\__/~"],
+      ["   ,-,", "  ({E})>", " ~ \\__/ ~"],
+    ],
+    beat: pulse(6, 2),
+  },
+  // float: never lands, drifting the whole time
   ghost: {
     idle: [
       ["  .-.", " ({E})", " '\"'\"'"],
       ["  .-.", " ({E})", ' ~"~"~'],
     ],
+    beat: pulse(4, 2),
   },
+  // squash: a brief squish, then a long settle
   slime: {
     idle: [
       ["   ___", "  ({E})", " (_____)"],
       ["  ___", " (({E}))", "(_______)"],
     ],
+    beat: pulse(10, 2),
   },
 }
 
