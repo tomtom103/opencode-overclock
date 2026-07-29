@@ -7,6 +7,18 @@ export async function ensureStateDir(directory: string, sub?: string): Promise<s
   return dir
 }
 
+/**
+ * True once per project, then never again. Marker lives beside the other state, so
+ * deleting .opencode/overclock/ re-arms the first-run notice.
+ */
+export async function firstRun(directory: string): Promise<boolean> {
+  const dir = await ensureStateDir(directory)
+  const marker = Bun.file(`${dir}/.installed`)
+  if (await marker.exists()) return false
+  await Bun.write(marker, new Date().toISOString())
+  return true
+}
+
 export async function readJson<T>(path: string, fallback: T): Promise<T> {
   const file = Bun.file(path)
   if (!(await file.exists())) return fallback

@@ -51,6 +51,8 @@ export function probeBwrap(): boolean {
  */
 export const sandbox: FeatureModule = {
   name: "sandbox",
+  tools: ["bash_unsandboxed"],
+  options: { net: "boolean" },
   defaultEnabled: false,
   async init(ctx, options) {
     const policy: SandboxPolicy = {

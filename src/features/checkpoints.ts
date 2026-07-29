@@ -81,6 +81,7 @@ export function createCheckpoints(client: Client): Checkpoints {
  */
 export const checkpoints: FeatureModule = {
   name: "checkpoints",
+  tools: ["checkpoint_list", "checkpoint_revert", "checkpoint_restore"],
   defaultEnabled: true,
   requires: ["session.revert", "session.unrevert", "session.messages"],
   async init(ctx) {

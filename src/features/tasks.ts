@@ -236,6 +236,13 @@ const fmt = (t: TaskRecord) =>
  */
 export const tasks: FeatureModule = {
   name: "tasks",
+  tools: ["task_run", "task_status", "task_output", "task_kill"],
+  options: {
+    killOnExit: "boolean",
+    stallDetection: "boolean",
+    stallThresholdMs: "number",
+    stallCheckIntervalMs: "number",
+  },
   defaultEnabled: true,
   requires: ["session.promptAsync", "session.messages"],
   async init(ctx, options) {

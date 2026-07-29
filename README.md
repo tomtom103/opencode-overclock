@@ -41,6 +41,22 @@ Local dev: copy or symlink into `.opencode/plugins/` — see [Dev](#dev). Note t
 
 `true`/`false` toggle. Object = on + options. Defaults: all on except sandbox; guard inert without `hooks`.
 
+Unknown keys, unknown feature names, and wrong option types are reported at startup with a
+"did you mean" — a typo like `killOnExist` would otherwise read as "not set" and silently
+run the default. Bad config never takes the plugin down; it falls back to defaults.
+
+| Feature                | Options                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `tasks`                | `killOnExit` bool · `stallDetection` bool · `stallThresholdMs` num · `stallCheckIntervalMs` num |
+| `sched`                | `skipIfBusy` bool                                                                               |
+| `sandbox`              | `net` bool                                                                                      |
+| `guard`                | `hooks` array                                                                                   |
+| `usage`, `checkpoints` | —                                                                                               |
+
+On a project's first run, overclock reports what it added. Worth knowing that installing it
+grants the agent **background shell execution** (`task_run`) and **recurring scheduling**
+(`schedule_create`). The tool definitions themselves cost ~800 tokens of context in total.
+
 ## Features
 
 | Module        | Tools                                                      | Does                                                                                                         |

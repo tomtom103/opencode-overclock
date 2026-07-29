@@ -34,6 +34,8 @@ interface Schedule {
  */
 export const sched: FeatureModule = {
   name: "sched",
+  tools: ["schedule_create", "schedule_list", "schedule_delete"],
+  options: { skipIfBusy: "boolean" },
   defaultEnabled: true,
   requires: ["session.promptAsync", "session.messages", "session.create"],
   async init(ctx, options) {

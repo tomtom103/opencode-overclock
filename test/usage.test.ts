@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test"
-import { mkdtempSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { describe, expect, test, afterAll } from "bun:test"
+import { tmpDir, cleanupTmp } from "./tmp.ts"
 import { createUsageTracker, dayKey, type UsageTracker } from "../src/features/usage.ts"
 
-const statePath = () => `${mkdtempSync(`${tmpdir()}/overclock-usage-`)}/usage.json`
+afterAll(cleanupTmp)
+
+const statePath = () => `${tmpDir("usage")}/usage.json`
 
 function assistantEvent(overrides: {
   id: string
@@ -220,7 +221,7 @@ describe("createUsageTracker: persistence", () => {
 
   test("missing state file -> load falls back to empty days", async () => {
     const t = createUsageTracker({
-      statePath: `${mkdtempSync(`${tmpdir()}/overclock-usage-`)}/nope.json`,
+      statePath: `${tmpDir("usage")}/nope.json`,
     })
     await t.load()
     expect(t.getState()).toEqual({ days: {} })

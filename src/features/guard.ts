@@ -185,6 +185,8 @@ export function createGuardRunner(deps: GuardRunnerDeps): GuardRunner {
  */
 export const guard: FeatureModule = {
   name: "guard",
+  tools: [],
+  options: { hooks: "array" },
   defaultEnabled: true,
   requires: ["session.promptAsync", "session.messages"],
   async init(ctx, options) {

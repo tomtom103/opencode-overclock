@@ -1,6 +1,5 @@
-import { describe, expect, test } from "bun:test"
-import { mkdtempSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { describe, expect, test, afterAll } from "bun:test"
+import { tmpDir, cleanupTmp } from "./tmp.ts"
 import {
   createTaskManager,
   looksLikePrompt,
@@ -8,7 +7,9 @@ import {
   type TaskManager,
 } from "../src/features/tasks.ts"
 
-const logDir = () => mkdtempSync(`${tmpdir()}/overclock-test-`)
+afterAll(cleanupTmp)
+
+const logDir = () => tmpDir("tasks")
 
 function waitFor(check: () => Promise<boolean>, timeoutMs = 2000): Promise<void> {
   return new Promise((resolve, reject) => {

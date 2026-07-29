@@ -236,6 +236,7 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
  */
 export const usage: FeatureModule = {
   name: "usage",
+  tools: ["usage_report"],
   defaultEnabled: true,
   async init(ctx) {
     const dir = await ensureStateDir(ctx.directory)
