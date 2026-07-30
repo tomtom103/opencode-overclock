@@ -1,6 +1,6 @@
 {
   "name": "opencode-overclock",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Power-ups for opencode: background tasks, scheduling, sandboxed bash, tool hooks, usage telemetry, checkpoints. Modular, toggleable.",
   "type": "module",
   "repository": {
@@ -35,7 +35,7 @@
     "prepublishOnly": "tsc --noEmit && bun test"
   },
   "engines": {
-    "opencode": ">=1.18.9"
+    "opencode": ">=1.18.4"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.9",

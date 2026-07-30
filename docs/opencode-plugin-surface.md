@@ -4,6 +4,19 @@ Validated against `anomalyco/opencode` @ `8cbea4f` (2026-07-29, `@opencode-ai/pl
 
 Source of truth: `packages/plugin/src/index.ts` (v1 hooks), `packages/plugin/src/tui.ts` (TUI plugin API), `packages/plugin/src/v2/` (v2 API), `packages/schema/src/event-manifest.ts` (events). Docs pages undersell badly — several hooks and the whole TUI/v2 surfaces are undocumented.
 
+## Minimum host version
+
+`engines.opencode` is `>=1.18.4`. Derived by probing every published `@opencode-ai/plugin` version for the surfaces we touch, then typechecking + running the suite against each, then booting real `opencode serve` instances. Floors, in order:
+
+| Surface we use                                                                                                                        | First release                 |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| v1 hooks, dynamic tools, `session.promptAsync`/`messages`/`create`/`revert`/`unrevert`, `tui.showToast`, `*_prompt_right` slots, `kv` | <= 1.14.20 (oldest published) |
+| `TuiPluginApi.attention.notify` (+ sound)                                                                                             | 1.14.49                       |
+| `Hooks.dispose` — below this the host never calls it, so our timers/watchers leak                                                     | 1.15.11                       |
+| bundled `@opentui/solid >= 0.4.5`, matching our declared peer, for the buddy sprite                                                   | 1.18.4                        |
+
+So 1.15.11 is the floor for the server surface and 1.18.4 for the buddy; we gate on the latter. Re-derive on bump: the `dispose` check is behavioural, not type-level — a plugin returning `{ dispose }` that writes a marker file, then `POST /instance/dispose`.
+
 ## Three plugin surfaces (not one)
 
 | Surface             | Entry                                              | Runtime             | Status                    |
@@ -123,6 +136,16 @@ Types-only in `@opencode-ai/plugin/v2/{effect,promise}` (promise = thin adapter 
 - Manifest target detection (`opencode plugin <dir>`) reports `Detected server + tui targets` and writes **two** config entries: `opencode.json` (server) and `tui.json` (TUI). An `opencode.json` entry alone loads only the server half.
 - Module shapes: modern `export default { id?, server }`; legacy: every named export treated as a plugin fn. File plugins must export `id`.
 - Kill switches: `OPENCODE_PURE` (no external plugins), `OPENCODE_DISABLE_DEFAULT_PLUGINS` (no built-ins: codex/copilot/gitlab/poe/cloudflare/azure/digitalocean/snowflake/xai auth plugins).
+
+## Tool ids on the wire (gateway whitelists)
+
+Verified live on 1.18.4 by reading the host's own registry at `GET /experimental/tool/ids`, which is what gets serialized to the provider.
+
+- The `tool` hook is `{[key: string]: ToolDefinition}` and **the key is the id sent to the provider**. Renaming is therefore a pure config concern — no feature module needs to know. overclock folds preset + explicit renames + allowlist into one policy in `src/tools.ts` and applies it in the single `mergeHooks` chokepoint.
+- Host built-ins observed on 1.18.4: `apply_patch bash edit glob grep invalid question read skill task todowrite webfetch websearch write`. A plugin tool registered under one of these **replaces** it in the final map (documented upstream behaviour, "a duplicate id overrides the built-in"). A name differing only by case (`Task` vs `task`) does not collide host-side — the host offers both — but a case-insensitive gateway sees one name twice.
+- opencode's ids are snake_case and disjoint from Claude Code's PascalCase set, so a proxy whitelisting Claude Code's tools leaves that whole namespace free for plugin tools. This is what `toolPreset: "claude-code"` borrows.
+- There is no per-request tool filter hook. `tool.definition` rewrites description/params of an existing tool but cannot rename or remove one, so withholding has to happen at registration.
+- Permission ids (`ctx.ask({permission})`) are independent of the wire id and are deliberately left unrenamed: they key the user's opencode permission config.
 
 ## Customization points
 

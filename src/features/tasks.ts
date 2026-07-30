@@ -245,7 +245,7 @@ export const tasks: FeatureModule = {
   },
   defaultEnabled: true,
   requires: ["session.promptAsync", "session.messages"],
-  async init(ctx, options) {
+  async init(ctx, options, shared) {
     const logDir = await ensureStateDir(ctx.directory, "tasks")
     const stateDir = await ensureStateDir(ctx.directory)
     const killOnExit = options.killOnExit !== false
@@ -284,7 +284,7 @@ export const tasks: FeatureModule = {
                 task.sessionID,
                 `[background task ${task.id} "${task.description}" appears to be waiting for interactive input]\n` +
                   `last output:\n${tail.trimEnd()}\n\n` +
-                  `The command is likely blocked on a prompt. Kill it with task_kill and re-run non-interactively ` +
+                  `The command is likely blocked on a prompt. Kill it with ${shared.toolName("task_kill")} and re-run non-interactively ` +
                   `(e.g. pipe input like \`echo y | cmd\`, or pass a --yes/--force flag).`,
               )
             },

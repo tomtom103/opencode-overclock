@@ -1,10 +1,7 @@
-import type { FeatureModule, OptionType } from "./types.ts"
+import type { ConfigIssue, FeatureModule, OptionType } from "./types.ts"
+import type { ToolPolicy } from "./tools.ts"
 
-export interface ConfigIssue {
-  /** dotted location in overclock.json, e.g. "features.tasks.killOnExit" */
-  path: string
-  message: string
-}
+export type { ConfigIssue }
 
 /** Levenshtein, capped -- only used to turn a typo into a "did you mean". */
 function distance(a: string, b: string): number {
@@ -53,6 +50,48 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * Check the `toolNames` remap. A rename that silently does nothing is the worst outcome
+ * here: the proxy keeps rejecting the tool and the config looks correct. So an unknown
+ * source name is an issue, and two sources aiming at one target is an issue -- the merge
+ * would keep only the last.
+ */
+function validateToolNames(toolNames: unknown, features: readonly FeatureModule[]): ConfigIssue[] {
+  if (toolNames === undefined) return []
+  if (!isPlainObject(toolNames)) {
+    return [{ path: "toolNames", message: `"toolNames" must be an object, got ${typeOf(toolNames)}` }]
+  }
+
+  const issues: ConfigIssue[] = []
+  const declared = features.flatMap((f) => f.tools ?? [])
+  const targets = new Map<string, string>()
+
+  for (const [from, to] of Object.entries(toolNames)) {
+    if (!declared.includes(from)) {
+      issues.push({ path: `toolNames.${from}`, message: unknownKey(from, declared, "tool") })
+      continue
+    }
+    if (typeof to !== "string" || to.trim() === "") {
+      issues.push({
+        path: `toolNames.${from}`,
+        message: `must be a non-empty string, got ${typeOf(to)}`,
+      })
+      continue
+    }
+    const prior = targets.get(to)
+    if (prior) {
+      issues.push({
+        path: `toolNames.${from}`,
+        message: `"${to}" is already the target of "${prior}" -- only one would survive the merge`,
+      })
+      continue
+    }
+    targets.set(to, from)
+  }
+
+  return issues
+}
+
+/**
  * Check overclock.json against the feature registry.
  *
  * Exists because an unrecognised key is otherwise a silent no-op: `killOnExist: true`
@@ -66,10 +105,12 @@ export function validateConfig(config: unknown, features: readonly FeatureModule
     return [{ path: "", message: `config must be an object, got ${typeOf(config)}` }]
   }
 
-  const TOP = ["features"]
+  const TOP = ["features", "toolNames", "toolAllowlist"]
   for (const key of Object.keys(config)) {
     if (!TOP.includes(key)) issues.push({ path: key, message: unknownKey(key, TOP, "top-level key") })
   }
+
+  issues.push(...validateToolNames(config.toolNames, features))
 
   const { features: featuresCfg } = config
   if (featuresCfg === undefined) return issues
@@ -130,14 +171,27 @@ export function validateConfig(config: unknown, features: readonly FeatureModule
  * capability: installing overclock hands the agent background shell execution and
  * recurring scheduling, and that should not be something a user discovers by accident.
  */
-export function summarise(enabled: readonly FeatureModule[], skipped: readonly string[]): string {
-  const toolCount = enabled.reduce((n, f) => n + (f.tools?.length ?? 0), 0)
+export function summarise(
+  enabled: readonly FeatureModule[],
+  skipped: readonly string[],
+  policy: ToolPolicy = { rename: {}, withheld: new Set() },
+): string {
+  const { rename, withheld } = policy
+  const offered = enabled.flatMap((f) => (f.tools ?? []).filter((t) => !withheld.has(t)))
+  // Report the name the model is actually offered, not the declared one -- under a remap the
+  // declared name appears nowhere on the wire, so listing it would misdescribe the session.
   const parts = enabled.map((f) => {
-    const tools = f.tools?.length ? ` (${f.tools.join(", ")})` : ""
-    return `${f.name}${tools}`
+    const names = (f.tools ?? []).filter((t) => !withheld.has(t)).map((t) => rename[t] ?? t)
+    return `${f.name}${names.length ? ` (${names.join(", ")})` : ""}`
   })
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
-  let line = `${plural(enabled.length, "module")}, ${plural(toolCount, "tool")}: ${parts.join(" · ")}`
+  let line = `${plural(enabled.length, "module")}, ${plural(offered.length, "tool")}: ${parts.join(" · ")}`
+  const applied = offered.filter((t) => rename[t] && rename[t] !== t).map((t) => `${t}->${rename[t]}`)
+  if (applied.length) line += ` | renamed: ${applied.join(", ")}`
+  // Withheld tools are the one case where the session is quietly less capable than the config
+  // implies, so they are named here rather than left to the issue log alone.
+  const held = enabled.flatMap((f) => (f.tools ?? []).filter((t) => withheld.has(t)))
+  if (held.length) line += ` | withheld: ${held.join(", ")}`
   if (skipped.length) line += ` | skipped: ${skipped.join(", ")}`
   return line
 }

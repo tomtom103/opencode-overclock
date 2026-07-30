@@ -3,7 +3,7 @@ import { checkpoints, createCheckpoints } from "../src/features/checkpoints.ts"
 import { createBusyTracker } from "../src/lib/busy.ts"
 
 /** fresh per call: shared state must not leak between tests */
-const shared = () => ({ busy: createBusyTracker() })
+const shared = () => ({ busy: createBusyTracker(), toolName: (n: string) => n })
 
 const user = (id: string, created: number, text?: string) => ({
   info: { id, role: "user", time: { created } },

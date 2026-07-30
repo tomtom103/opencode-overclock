@@ -128,3 +128,47 @@ describe("summarise", () => {
     expect(line).toMatch(/0 tools/)
   })
 })
+
+describe("toolNames remap", () => {
+  test("accepts a rename of a declared tool", () => {
+    expect(validateConfig({ toolNames: { task_run: "Bash" } }, FEATURES)).toEqual([])
+  })
+
+  test("flags a rename of a tool nobody declares", () => {
+    const issues = validateConfig({ toolNames: { task_ruh: "Bash" } }, FEATURES)
+    expect(issues.length).toBe(1)
+    expect(issues[0].path).toBe("toolNames.task_ruh")
+    expect(issues[0].message).toMatch(/task_run/)
+  })
+
+  test("flags two sources aiming at one target -- only one survives the merge", () => {
+    const issues = validateConfig({ toolNames: { task_run: "X", task_kill: "X" } }, FEATURES)
+    expect(issues.length).toBe(1)
+    expect(issues[0].message).toMatch(/already the target/)
+  })
+
+  test("flags a non-string or blank target", () => {
+    expect(validateConfig({ toolNames: { task_run: 7 } }, FEATURES).length).toBe(1)
+    expect(validateConfig({ toolNames: { task_run: "  " } }, FEATURES).length).toBe(1)
+  })
+
+  test("flags toolNames that is not an object", () => {
+    const issues = validateConfig({ toolNames: [] }, FEATURES)
+    expect(issues.length).toBe(1)
+    expect(issues[0].path).toBe("toolNames")
+  })
+
+  test("summarise reports the wire name, and the mapping that produced it", () => {
+    const line = summarise([FEATURES[0]], [], { rename: { task_run: "Bash" }, withheld: new Set() })
+    expect(line).toMatch(/Bash/)
+    expect(line).toMatch(/task_run->Bash/)
+    expect(line).not.toMatch(/\(task_run,/)
+  })
+
+  test("summarise names withheld tools and drops them from the count", () => {
+    const line = summarise([FEATURES[0]], [], { rename: {}, withheld: new Set(["task_kill"]) })
+    expect(line).toMatch(/1 tool:/)
+    expect(line).toMatch(/withheld: task_kill/)
+    expect(line).toMatch(/tasks \(task_run\)/)
+  })
+})

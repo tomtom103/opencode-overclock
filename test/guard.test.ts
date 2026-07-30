@@ -13,7 +13,7 @@ import {
 afterAll(cleanupTmp)
 
 /** fresh per call: shared state must not leak between tests */
-const shared = () => ({ busy: createBusyTracker() })
+const shared = () => ({ busy: createBusyTracker(), toolName: (n: string) => n })
 
 function makeHook(overrides: Partial<GuardHook> = {}): GuardHook {
   return {
