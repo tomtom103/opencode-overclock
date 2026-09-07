@@ -65,8 +65,9 @@ export async function inject(
 ): Promise<boolean> {
   try {
     const ctx = await sessionContext(client, sessionID)
-    await client.session.promptAsync({
+    const res = await (client.session.promptAsync as any)({
       path: { id: sessionID },
+      throwOnError: true,
       body: {
         parts: [{ type: "text", text }],
         ...(ctx.model ? { model: ctx.model } : {}),
@@ -74,6 +75,12 @@ export async function inject(
         ...(options?.noReply ? { noReply: true } : {}),
       },
     })
+    if (res && typeof res === "object" && "error" in res && (res as any).error) {
+      console.warn(
+        `[overclock] inject failed (session ${sessionID}): ${JSON.stringify((res as any).error)}`,
+      )
+      return false
+    }
     return true
   } catch (e) {
     console.warn(`[overclock] inject failed (session ${sessionID}): ${e}`)

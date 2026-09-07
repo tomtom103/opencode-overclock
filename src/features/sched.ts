@@ -11,12 +11,25 @@ const z = tool.schema
 export type Spec = { kind: "interval"; ms: number } | { kind: "cron"; expr: string }
 
 const UNITS: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }
+export const MIN_INTERVAL_MS = 5000
+export const MAX_SCHEDULES = 50
+export const MAX_CONSECUTIVE_FAILURES = 5
 
-/** "30s" | "5m" | "2h" | "1d" -> interval; else cron expr (validated). Throws on garbage. */
+/** "30s" | "5m" | "2h" | "1d" -> interval; else cron expr (validated). Throws on garbage or frequency < 5s. */
 export function parseSpec(spec: string): Spec {
   const m = spec.trim().match(/^(\d+)([smhd])$/)
-  if (m) return { kind: "interval", ms: Number(m[1]) * UNITS[m[2]!]! }
-  new Cron(spec) // throws if invalid
+  if (m) {
+    const ms = Number(m[1]) * UNITS[m[2]!]!
+    if (ms < MIN_INTERVAL_MS) {
+      throw new Error(`Schedule interval must be at least 5s (got ${spec})`)
+    }
+    return { kind: "interval", ms }
+  }
+  const cron = new Cron(spec) // throws if invalid
+  const runs = cron.nextRuns(2)
+  if (runs.length >= 2 && runs[1]!.getTime() - runs[0]!.getTime() < MIN_INTERVAL_MS) {
+    throw new Error(`Schedule frequency must be at least 5s (got ${spec})`)
+  }
   return { kind: "cron", expr: spec }
 }
 
@@ -34,6 +47,7 @@ export interface ScheduleManager {
   delete(id: string): Promise<boolean>
   arm(s: ScheduleEntry): void
   disarm(id: string): void
+  fire(s: ScheduleEntry): Promise<void>
   nextRun(s: ScheduleEntry): string
   dispose(): void
 }
@@ -52,9 +66,18 @@ export interface ScheduleManagerDeps {
 export async function createScheduleManager(deps: ScheduleManagerDeps): Promise<ScheduleManager> {
   const schedules = new Map<string, ScheduleEntry>()
   const timers = new Map<string, { stop(): void }>()
+  const consecutiveFailures = new Map<string, number>()
   const skipIfBusy = deps.skipIfBusy !== false
 
   const persist = async () => writeJson(deps.storePath, [...schedules.values()])
+
+  async function remove(id: string): Promise<boolean> {
+    if (!schedules.delete(id)) return false
+    disarm(id)
+    consecutiveFailures.delete(id)
+    await persist()
+    return true
+  }
 
   async function fire(s: ScheduleEntry) {
     try {
@@ -64,7 +87,21 @@ export async function createScheduleManager(deps: ScheduleManagerDeps): Promise<
           return
         }
         const ok = await inject(deps.client, s.sessionID, `[schedule ${s.id} fired]\n${s.prompt}`)
-        if (!ok) await toast(deps.client, `schedule ${s.id}: target session gone`, "warning")
+        if (!ok) {
+          const fails = (consecutiveFailures.get(s.id) ?? 0) + 1
+          consecutiveFailures.set(s.id, fails)
+          if (fails >= MAX_CONSECUTIVE_FAILURES) {
+            console.warn(
+              `[overclock] schedule ${s.id}: target session ${s.sessionID} unreachable ${fails} times, auto-removing`,
+            )
+            await toast(deps.client, `schedule ${s.id}: session unreachable, auto-removed`, "warning")
+            await remove(s.id)
+            return
+          }
+          await toast(deps.client, `schedule ${s.id}: target session gone`, "warning")
+        } else {
+          consecutiveFailures.delete(s.id)
+        }
       } else {
         const res = await deps.client.session.create({ body: { title: `sched:${s.id}` } })
         const id = res.data?.id
@@ -117,8 +154,12 @@ export async function createScheduleManager(deps: ScheduleManagerDeps): Promise<
     schedules,
     arm,
     disarm,
+    fire,
     nextRun,
     async create(input) {
+      if (schedules.size >= MAX_SCHEDULES) {
+        throw new Error(`Maximum schedules limit reached (${MAX_SCHEDULES})`)
+      }
       parseSpec(input.spec)
       const s: ScheduleEntry = {
         id: `s-${crypto.randomUUID().slice(0, 6)}`,
@@ -136,12 +177,7 @@ export async function createScheduleManager(deps: ScheduleManagerDeps): Promise<
     list() {
       return [...schedules.values()].map((s) => ({ schedule: s, next: nextRun(s) }))
     },
-    async delete(id: string) {
-      if (!schedules.delete(id)) return false
-      disarm(id)
-      await persist()
-      return true
-    },
+    delete: remove,
     dispose() {
       for (const id of [...timers.keys()]) disarm(id)
     },

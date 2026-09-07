@@ -73,4 +73,39 @@ describe("createScheduleManager", () => {
 
     mgr.dispose()
   })
+
+  test("auto-removes schedule after 5 consecutive failures when target session is dead", async () => {
+    const dir = tmpDir("sched-fail")
+    const storePath = `${dir}/schedules.json`
+    const client = {
+      session: {
+        // Simulates SDK returning an error payload for dead session
+        promptAsync: async () => ({ error: { name: "NotFoundError", message: "Session not found" } }),
+        messages: async () => ({ data: [] }),
+      },
+      tui: { showToast: async () => {} },
+    }
+
+    const mgr = await createScheduleManager({ storePath, client })
+    const { schedule } = await mgr.create({
+      spec: "5m",
+      prompt: "heartbeat",
+      target: "current",
+      sessionID: "dead-session",
+    })
+
+    expect(mgr.list()).toHaveLength(1)
+
+    // Fire 4 times: should remain scheduled
+    for (let i = 0; i < 4; i++) {
+      await mgr.fire(schedule)
+    }
+    expect(mgr.list()).toHaveLength(1)
+
+    // 5th failure: triggers auto-removal
+    await mgr.fire(schedule)
+    expect(mgr.list()).toHaveLength(0)
+
+    mgr.dispose()
+  })
 })

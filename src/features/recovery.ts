@@ -68,7 +68,11 @@ export function createRecoveryTracker(maxAttempts = 3, cooldownMs = 60_000): Rec
     canAttempt(sessionID: string): boolean {
       const now = Date.now()
       const list = (attempts.get(sessionID) ?? []).filter((t) => now - t < cooldownMs)
-      attempts.set(sessionID, list)
+      if (list.length === 0) {
+        attempts.delete(sessionID)
+      } else {
+        attempts.set(sessionID, list)
+      }
       return list.length < maxAttempts
     },
     recordAttempt(sessionID: string): void {
@@ -101,8 +105,9 @@ export const recovery: FeatureModule = {
     return {
       event: async ({ event }) => {
         if (event.type === "session.deleted") {
-          const props = event.properties as { info?: { id?: string } } | undefined
-          if (props?.info?.id) tracker.reset(props.info.id)
+          const props = event.properties as { sessionID?: string; info?: { id?: string } } | undefined
+          const id = props?.sessionID ?? props?.info?.id
+          if (id) tracker.reset(id)
           return
         }
 
@@ -130,6 +135,11 @@ export const recovery: FeatureModule = {
         await toast(ctx.client, `recovering session from ${classified.reason}...`, "warning")
 
         if (autoResume) {
+          if (classified.reason === "rate_limit") {
+            // Apply a brief backoff delay before retrying a throttled endpoint
+            await new Promise((r) => setTimeout(r, 2000))
+          }
+
           const resumeText =
             classified.reason === "context_limit"
               ? "[session recovered: context limit reached; summarize recent progress and continue with minimal output]"

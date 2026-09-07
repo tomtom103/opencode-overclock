@@ -1,6 +1,7 @@
+import { isAbsolute, relative } from "node:path"
 import type { FeatureModule } from "../types.ts"
 import { inject, toast } from "../lib/inject.ts"
-import { execBash } from "../lib/exec.ts"
+import { execBash, redactSensitiveOutput, sanitizeEnv } from "../lib/exec.ts"
 
 export interface GuardHook {
   name: string
@@ -24,6 +25,150 @@ export const EDIT_ERROR_PATTERNS = [
 
 export const EDIT_RECOVERY_HINT =
   "\n\n[edit recovery hint]\nThe edit failed due to a content mismatch. Use the `read` tool to inspect the latest file state around the target lines before retrying the edit."
+
+export interface FloorGuardOptions {
+  allowSkips?: boolean
+  allowSuppressions?: boolean
+  allowAssertionRemoval?: boolean
+  [key: string]: unknown
+}
+
+export interface FloorViolationPattern {
+  name: string
+  pattern: RegExp
+  description: string
+  testFileOnly?: boolean
+}
+
+export const FLOOR_VIOLATIONS: FloorViolationPattern[] = [
+  {
+    name: "test-skip-js",
+    pattern:
+      /(?:^|[.\s])(?:skip\s*\(|xit\s*\(|xdescribe\s*\()|\b(?:test\.skip|it\.skip|describe\.skip)\b/,
+    description: "Skipping test execution (.skip / xit / xdescribe)",
+    testFileOnly: true,
+  },
+  {
+    name: "test-skip-python",
+    pattern: /@pytest\.mark\.skip|@unittest\.skip/,
+    description: "Skipping test execution (@pytest.mark.skip / @unittest.skip)",
+    testFileOnly: true,
+  },
+  {
+    name: "test-skip-go",
+    pattern: /\bt\.Skip(?:\(|f\()/,
+    description: "Skipping test execution (t.Skip)",
+    testFileOnly: true,
+  },
+  {
+    name: "test-skip-rust",
+    pattern: /#\[ignore(?:\s*=.*)?\]/,
+    description: "Skipping test execution (#[ignore])",
+    testFileOnly: true,
+  },
+  {
+    name: "ts-suppression",
+    pattern:
+      /\/\/\s*@ts-(?:ignore|nocheck)\b|\/\*\s*@ts-(?:ignore|nocheck)\s*\*\/|\{\s*\/\*\s*@ts-(?:ignore|nocheck)\s*\*\/\s*\}/,
+    description: "TypeScript error suppression (@ts-ignore / @ts-nocheck)",
+  },
+  {
+    name: "eslint-suppression",
+    pattern: /\/\*?\s*eslint-disable(?:-next-line)?\b/,
+    description: "ESLint diagnostic suppression (eslint-disable)",
+  },
+  {
+    name: "python-suppression",
+    pattern: /#\s*(?:noqa|type:\s*ignore)\b/,
+    description: "Python diagnostic suppression (# noqa / # type: ignore)",
+  },
+  {
+    name: "empty-catch",
+    pattern: /catch\s*(?:\([^)]*\))?\s*\{\s*\}/,
+    description: "Empty catch block swallowing errors silently",
+  },
+]
+
+export const ASSERTION_PATTERN =
+  /\b(?:expect\s*\(|assert\b|assert\.[a-zA-Z]+|assertEquals|assertTrue|assertFalse|self\.assert)/
+
+export function isTestFile(filePath: string): boolean {
+  const normalized = filePath.toLowerCase().replaceAll("\\", "/")
+  const segments = normalized.split("/")
+  const filename = segments[segments.length - 1] ?? ""
+
+  return (
+    filename.includes(".test.") ||
+    filename.includes(".spec.") ||
+    segments.includes("test") ||
+    segments.includes("tests") ||
+    segments.includes("__tests__") ||
+    filename.endsWith("_test.go") ||
+    filename.endsWith("_test.py") ||
+    filename.endsWith("_spec.rb") ||
+    filename.startsWith("test_")
+  )
+}
+
+export function checkFloorViolation(
+  tool: string,
+  args: Record<string, unknown> | undefined,
+  options: FloorGuardOptions = {},
+): string | null {
+  const toolLower = tool.toLowerCase()
+  if (toolLower !== "edit" && toolLower !== "write") return null
+  if (!args) return null
+
+  const filePath =
+    typeof args.filePath === "string"
+      ? args.filePath
+      : typeof args.path === "string"
+        ? args.path
+        : typeof args.file_path === "string"
+          ? args.file_path
+          : ""
+
+  const isTest = isTestFile(filePath)
+
+  if (toolLower === "edit") {
+    const oldStr = typeof args.oldString === "string" ? args.oldString : ""
+    const newStr = typeof args.newString === "string" ? args.newString : ""
+
+    for (const v of FLOOR_VIOLATIONS) {
+      if (v.testFileOnly && !isTest) continue
+      if (v.testFileOnly && options.allowSkips) continue
+      if (!v.testFileOnly && options.allowSuppressions) continue
+
+      if (v.pattern.test(newStr) && !v.pattern.test(oldStr)) {
+        return `Detected ${v.description} in ${filePath || "edited file"}. Modifying code to bypass tests or suppress warnings is prohibited by floor-guard policy. Fix the underlying issue instead.`
+      }
+    }
+
+    if (!options.allowAssertionRemoval && isTest) {
+      if (
+        ASSERTION_PATTERN.test(oldStr) &&
+        !ASSERTION_PATTERN.test(newStr) &&
+        newStr.trim().length > 0
+      ) {
+        return `Stripped test assertion(s) from ${filePath || "test file"} without replacement. Deleting assertions to make tests pass is prohibited by floor-guard policy. Fix the implementation to satisfy the assertion.`
+      }
+    }
+  } else if (toolLower === "write") {
+    const content = typeof args.content === "string" ? args.content : ""
+
+    for (const v of FLOOR_VIOLATIONS) {
+      if (v.testFileOnly && !isTest) continue
+      if (v.testFileOnly && options.allowSkips) continue
+      if (!v.testFileOnly && options.allowSuppressions) continue
+
+      if (v.pattern.test(content)) {
+        return `Detected ${v.description} in ${filePath || "written file"}. Introducing test skips or error suppressions is prohibited by floor-guard policy.`
+      }
+    }
+  }
+
+  return null
+}
 
 export function checkEditFailure(tool: string, outputText: string): string | null {
   if (tool.toLowerCase() !== "edit") return null
@@ -112,6 +257,45 @@ export async function detectRecipes(directory: string): Promise<GuardHook[]> {
   return detected
 }
 
+/**
+ * Patterns matching dangerous command idioms that are inappropriate for quality-gate hooks,
+ * such as reverse shells, remote script piping, and arbitrary socket relays.
+ */
+export const DANGEROUS_COMMAND_PATTERNS: { pattern: RegExp; reason: string }[] = [
+  { pattern: /\/dev\/(?:tcp|udp)\//i, reason: "network socket redirection (/dev/tcp or /dev/udp)" },
+  { pattern: /\bmkfifo\b/i, reason: "named pipe creation (mkfifo)" },
+  {
+    pattern: /\b(?:nc|netcat)\b.*(?:\s+-e\s+|\s+-c\s+)/i,
+    reason: "netcat remote command execution flag (-e/-c)",
+  },
+  {
+    pattern: /\b(?:curl|wget|fetch)\b.*\|\s*(?:bash|sh|zsh|python|perl|ruby)\b/i,
+    reason: "remote script execution via pipe (curl/wget | shell)",
+  },
+  {
+    pattern: /\bbase64\s+(?:-d|--decode)\b.*\|\s*(?:bash|sh|zsh)\b/i,
+    reason: "encoded payload execution via pipe (base64 -d | shell)",
+  },
+  { pattern: /\bbash\s+-i\b.*>&/i, reason: "interactive reverse shell redirection (bash -i >&)" },
+  { pattern: /\bsocat\s+/i, reason: "socket relay execution (socat)" },
+]
+
+/**
+ * Validates a hook command string against dangerous patterns.
+ * Returns the rejection reason or null if valid.
+ */
+export function validateHookCommand(command: string): string | null {
+  for (const { pattern, reason } of DANGEROUS_COMMAND_PATTERNS) {
+    if (pattern.test(command)) {
+      return reason
+    }
+  }
+  return null
+}
+
+/** Maximum character length of failure payload tail to prevent prompt flooding. */
+export const MAX_FAILURE_PAYLOAD_CHARS = 4000
+
 /** options.hooks -> validated GuardHook[]. Invalid entries -> console.warn, skipped, never throw. */
 export function parseHooks(raw: unknown): GuardHook[] {
   if (!Array.isArray(raw)) return []
@@ -124,7 +308,19 @@ export function parseHooks(raw: unknown): GuardHook[] {
       console.warn(`[overclock] guard: skipping invalid hook config: ${JSON.stringify(entry)}`)
       continue
     }
+
+    const danger = validateHookCommand(e.run)
+    if (danger) {
+      console.warn(`[overclock] guard: rejecting unsafe hook "${e.name}": ${danger}`)
+      continue
+    }
+
     const pathFilter = typeof e.pathFilter === "string" ? e.pathFilter : undefined
+    if (pathFilter && pathFilter.includes("..")) {
+      console.warn(`[overclock] guard: rejecting hook "${e.name}": pathFilter cannot contain ".."`)
+      continue
+    }
+
     hooks.push({
       name: e.name,
       tools: e.tools as string[],
@@ -132,10 +328,11 @@ export function parseHooks(raw: unknown): GuardHook[] {
       glob: pathFilter ? new Bun.Glob(pathFilter) : undefined,
       run: e.run,
       mode: e.mode === "append" ? "append" : "inject",
-      debounceMs: typeof e.debounceMs === "number" ? e.debounceMs : 2000,
-      timeoutMs: typeof e.timeoutMs === "number" ? e.timeoutMs : 60000,
+      debounceMs: typeof e.debounceMs === "number" ? Math.max(50, Math.min(e.debounceMs, 60000)) : 2000,
+      timeoutMs: typeof e.timeoutMs === "number" ? Math.max(100, Math.min(e.timeoutMs, 300000)) : 60000,
       onSuccess: e.onSuccess === "notify" ? "notify" : "silent",
-      maxDeferMs: typeof e.maxDeferMs === "number" ? e.maxDeferMs : 300000,
+      maxDeferMs:
+        typeof e.maxDeferMs === "number" ? Math.max(1000, Math.min(e.maxDeferMs, 600000)) : 300000,
     })
   }
   return hooks
@@ -147,6 +344,7 @@ export function matchHook(
   toolName: string,
   filePath: string | undefined,
   resolveTool?: (name: string) => string,
+  cwd?: string,
 ): boolean {
   const matches = hook.tools.some((t) => {
     if (t === toolName) return true
@@ -156,18 +354,32 @@ export function matchHook(
   if (!matches) return false
   if (!hook.pathFilter) return true
   if (typeof filePath !== "string") return false
-  return (hook.glob ?? new Bun.Glob(hook.pathFilter)).match(filePath)
+
+  const glob = hook.glob ?? new Bun.Glob(hook.pathFilter)
+  const normalized = filePath.replaceAll("\\", "/")
+  if (glob.match(normalized)) return true
+
+  if (cwd && isAbsolute(normalized)) {
+    const rel = relative(cwd, normalized).replaceAll("\\", "/")
+    if (glob.match(rel)) return true
+  }
+
+  return false
 }
 
-/** `[guard "<name>" failed (exit <code>)]` + last 40 lines of combined stdout+stderr. */
+/** `[guard "<name>" failed (exit <code>)]` + sanitized last 40 lines of combined stdout+stderr. */
 export function failurePayload(name: string, code: number | null, combined: string): string {
-  const tail = combined.split("\n").slice(-40).join("\n")
+  const sanitized = redactSensitiveOutput(combined)
+  let tail = sanitized.split("\n").slice(-40).join("\n")
+  if (tail.length > MAX_FAILURE_PAYLOAD_CHARS) {
+    tail = tail.slice(-MAX_FAILURE_PAYLOAD_CHARS) + "\n... [truncated for security & length]"
+  }
   return `\n\n[guard "${name}" failed (exit ${code})]\n${tail}`
 }
 
 function buildEnv(toolName: string, filePath: string | undefined): Record<string, string | undefined> {
   return {
-    ...process.env,
+    ...sanitizeEnv(process.env),
     GUARD_TOOL: toolName,
     ...(filePath !== undefined ? { GUARD_FILE: filePath } : {}),
   }
@@ -179,7 +391,13 @@ async function runCommand(
   env: Record<string, string | undefined>,
   register?: (proc: Bun.Subprocess) => void,
 ): Promise<{ code: number | null; combined: string }> {
-  return execBash(hook.run, { cwd, env, timeoutMs: hook.timeoutMs, onSpawn: register })
+  return execBash(hook.run, {
+    cwd,
+    env,
+    timeoutMs: hook.timeoutMs,
+    onSpawn: register,
+    sanitizeEnv: true,
+  })
 }
 
 interface HookState {
@@ -352,9 +570,18 @@ export const guard: FeatureModule = {
       hooks.push(...autoHooks)
     }
 
+    const floorGuardEnabled =
+      options.floorGuard === true ||
+      options.auto === true ||
+      (typeof options.floorGuard === "object" && options.floorGuard !== null)
+    const floorGuardOpts: FloorGuardOptions =
+      typeof options.floorGuard === "object" && options.floorGuard !== null
+        ? (options.floorGuard as FloorGuardOptions)
+        : {}
+
     const editRecovery =
       options.editRecovery === true || (hooks.length > 0 && options.editRecovery !== false)
-    if (hooks.length === 0 && !editRecovery) return {}
+    if (hooks.length === 0 && !editRecovery && !floorGuardEnabled) return {}
 
     const runner =
       hooks.length > 0
@@ -380,13 +607,32 @@ export const guard: FeatureModule = {
           if (hint) output.output += hint
         }
 
+        if (floorGuardEnabled && typeof output.output === "string") {
+          const violation = checkFloorViolation(
+            input.tool,
+            input.args as Record<string, unknown> | undefined,
+            floorGuardOpts,
+          )
+          if (violation) {
+            output.output += `\n\n[overclock floor-guard warning]\n${violation}`
+            void toast(ctx.client, "guard: floor-guard violation detected", "warning")
+          }
+        }
+
         if (!runner || hooks.length === 0) return
 
         const args = input.args as Record<string, unknown> | undefined
-        const filePath = typeof args?.filePath === "string" ? args.filePath : undefined
+        const filePath =
+          typeof args?.filePath === "string"
+            ? args.filePath
+            : typeof args?.path === "string"
+              ? args.path
+              : typeof args?.file_path === "string"
+                ? args.file_path
+                : undefined
 
         for (const hook of hooks) {
-          if (!matchHook(hook, input.tool, filePath, shared?.toolName)) continue
+          if (!matchHook(hook, input.tool, filePath, shared?.toolName, ctx.directory)) continue
           if (hook.mode === "append") {
             const payload = await runner.runAppend(hook, input.tool, filePath)
             if (payload && typeof output.output === "string") output.output += payload

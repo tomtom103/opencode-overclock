@@ -1,4 +1,6 @@
-import { mkdir } from "node:fs/promises"
+import { mkdir, copyFile } from "node:fs/promises"
+import { writeFileSync, renameSync, unlinkSync, mkdirSync } from "node:fs"
+import { dirname } from "node:path"
 import { shellQuote } from "../process/exec.ts"
 
 export { shellQuote }
@@ -32,16 +34,36 @@ export async function readJson<T>(path: string, fallback: T): Promise<T> {
   if (!(await file.exists())) return fallback
   try {
     return (await file.json()) as T
-  } catch {
+  } catch (e) {
+    console.warn(`[overclock] failed to parse JSON at ${path}: ${e}`)
+    try {
+      await copyFile(path, `${path}.corrupt.${Date.now()}`)
+    } catch {}
     return fallback
   }
 }
 
 /**
- * Serializes the value formatted with 2 spaces and writes to the destination path.
+ * Serializes the value formatted with 2 spaces and atomically writes to the destination path.
  */
 export async function writeJson(path: string, value: unknown): Promise<void> {
-  await Bun.write(path, JSON.stringify(value, null, 2))
+  const tmpPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`
+  const content = JSON.stringify(value, null, 2)
+  try {
+    writeFileSync(tmpPath, content)
+    renameSync(tmpPath, path)
+  } catch (err: any) {
+    if (err?.code === "ENOENT") {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(tmpPath, content)
+      renameSync(tmpPath, path)
+      return
+    }
+    try {
+      unlinkSync(tmpPath)
+    } catch {}
+    throw err
+  }
 }
 
 /** A typed state file accessor. */

@@ -4,7 +4,7 @@ import type { FeatureModule } from "../types.ts"
 import { ensureStateDir, shellQuote, writeJson } from "../lib/state.ts"
 import { taskStore, type TaskMirrorEntry } from "../lib/mirror.ts"
 import { inject, toast } from "../lib/inject.ts"
-import { NON_INTERACTIVE_ENV } from "../lib/exec.ts"
+import { killProcessTree, NON_INTERACTIVE_ENV, redactSensitiveOutput, sanitizeEnv } from "../lib/exec.ts"
 import { spawnTaskPane, type TmuxPane } from "../lib/tmux.ts"
 
 const z = tool.schema
@@ -127,12 +127,27 @@ function startStallWatchdog(
   }, checkIntervalMs)
 }
 
+export async function readLogTail(logPath: string, tailLines = 50): Promise<string> {
+  const file = Bun.file(logPath)
+  if (!(await file.exists())) return "(no output)"
+  const s = await stat(logPath).catch(() => null)
+  if (!s || s.size === 0) return "(no output)"
+
+  const effectiveTail = Math.max(1, tailLines)
+  // Cap read window to last 512KB to prevent memory exhaustion on giant log files
+  const maxBytes = 512 * 1024
+  const start = Math.max(0, s.size - maxBytes)
+  const text = await (start > 0 ? file.slice(start).text() : file.text())
+  const lines = text.trimEnd().split("\n")
+  return lines.slice(-effectiveTail).join("\n")
+}
+
 /** Exported for tests. onExit fires after status/exitCode settled. */
 export function createTaskManager(opts: {
   logDir: string
   /** mirror JSON path, written on every state change (spawn/exit/kill); omit to disable */
   mirrorPath?: string
-  onExit?: (task: TaskRecord) => void
+  onExit?: (task: TaskRecord) => void | Promise<void>
   /** enables the stall watchdog; absent -> no polling at all */
   onStall?: (task: TaskRecord, tail: string) => void
   stallCheckIntervalMs?: number
@@ -140,9 +155,27 @@ export function createTaskManager(opts: {
   stallTailBytes?: number
   /** spawn a tmux split pane to tail task logs (only if TMUX is active) */
   tmux?: boolean
+  sanitizeEnv?: boolean
+  envAllowlist?: string[]
+  maxTasks?: number
 }): TaskManager {
   const tasks = new Map<string, TaskEntry>()
   let counter = 0
+  const maxRetainedTasks = opts.maxTasks ?? 100
+
+  function pruneFinishedTasks(): void {
+    if (tasks.size <= maxRetainedTasks) return
+    const finished: string[] = []
+    for (const [id, entry] of tasks) {
+      if (entry.status !== "running") {
+        finished.push(id)
+      }
+    }
+    const toRemove = tasks.size - maxRetainedTasks
+    for (let i = 0; i < Math.min(toRemove, finished.length); i++) {
+      tasks.delete(finished[i]!)
+    }
+  }
 
   function persistMirror(): void {
     if (!opts.mirrorPath) return
@@ -165,14 +198,38 @@ export function createTaskManager(opts: {
   }): TaskRecord {
     const id = `t${(++counter).toString(36)}-${crypto.randomUUID().slice(0, 6)}`
     const logPath = `${opts.logDir}/${id}.log`
-    // shell-level redirection: no piping code, survives plugin restart losing streams
-    const proc = Bun.spawn(["bash", "-c", `(${input.command}) >> ${shellQuote(logPath)} 2>&1`], {
-      cwd: input.cwd,
-      env: {
-        ...process.env,
-        ...NON_INTERACTIVE_ENV,
-      },
-    })
+
+    let proc: Bun.Subprocess
+    try {
+      proc = Bun.spawn(["bash", "-c", `(${input.command}) >> ${shellQuote(logPath)} 2>&1`], {
+        cwd: input.cwd,
+        env: {
+          ...(opts.sanitizeEnv === false ? process.env : sanitizeEnv(process.env, opts.envAllowlist)),
+          ...NON_INTERACTIVE_ENV,
+        },
+      })
+    } catch (e) {
+      console.warn(`[overclock] failed to spawn task ${id}: ${e}`)
+      const failedEntry: TaskEntry = {
+        id,
+        description: input.description,
+        command: input.command,
+        cwd: input.cwd,
+        sessionID: input.sessionID,
+        status: "exited",
+        exitCode: 1,
+        logPath,
+        proc: null as any,
+        stallNotified: false,
+        startedAt: Date.now(),
+      }
+      tasks.set(id, failedEntry)
+      pruneFinishedTasks()
+      persistMirror()
+      opts.onExit?.(strip(failedEntry))
+      return strip(failedEntry)
+    }
+
     const entry: TaskEntry = {
       id,
       description: input.description,
@@ -219,7 +276,12 @@ export function createTaskManager(opts: {
       if (entry.status === "running") entry.status = "exited"
       entry.exitCode = code
       persistMirror()
-      opts.onExit?.(strip(entry))
+      try {
+        await opts.onExit?.(strip(entry))
+      } finally {
+        pruneFinishedTasks()
+        persistMirror()
+      }
     })
     return strip(entry)
   }
@@ -228,13 +290,16 @@ export function createTaskManager(opts: {
     const entry = tasks.get(id)
     if (!entry || entry.status !== "running") return false
     entry.status = "killed"
+    pruneFinishedTasks()
     persistMirror()
     if (entry.stallTimer) clearInterval(entry.stallTimer)
     entry.stallTimer = undefined
     if (entry.tmuxPane) void entry.tmuxPane.close()
-    entry.proc.kill("SIGTERM")
-    const hard = setTimeout(() => entry.proc.kill("SIGKILL"), 3000)
-    entry.proc.exited.then(() => clearTimeout(hard))
+    if (entry.proc) {
+      void killProcessTree(entry.proc, "SIGTERM")
+      const hard = setTimeout(() => void killProcessTree(entry.proc, "SIGKILL"), 3000)
+      entry.proc.exited.then(() => clearTimeout(hard))
+    }
     return true
   }
 
@@ -249,10 +314,7 @@ export function createTaskManager(opts: {
     output: async (id, tailLines = 50) => {
       const e = tasks.get(id)
       if (!e) return `no task ${id}`
-      const file = Bun.file(e.logPath)
-      if (!(await file.exists())) return "(no output)"
-      const lines = (await file.text()).split("\n")
-      return lines.slice(-tailLines - 1).join("\n")
+      return readLogTail(e.logPath, tailLines)
     },
     killAll: () => {
       for (const id of tasks.keys()) kill(id)
@@ -285,9 +347,13 @@ export const tasks: FeatureModule = {
       logDir,
       mirrorPath: taskStore.path(ctx.directory),
       tmux: options.tmux === true,
+      sanitizeEnv: options.sanitizeEnv !== false,
+      envAllowlist: Array.isArray(options.envAllowlist) ? (options.envAllowlist as string[]) : undefined,
+      maxTasks: typeof options.maxTasks === "number" ? options.maxTasks : 100,
       onExit: async (task) => {
         if (task.status === "killed") return
-        const tail = await manager.output(task.id, 20)
+        const rawTail = await readLogTail(task.logPath, 20)
+        const tail = redactSensitiveOutput(rawTail)
         const ok = task.exitCode === 0
         await toast(
           ctx.client,
@@ -305,12 +371,13 @@ export const tasks: FeatureModule = {
             stallThresholdMs,
             stallCheckIntervalMs,
             onStall: async (task: TaskRecord, tail: string) => {
+              const safeTail = redactSensitiveOutput(tail.trimEnd())
               await toast(ctx.client, `task ${task.id} looks stalled (waiting for input?)`, "warning")
               await inject(
                 ctx.client,
                 task.sessionID,
                 `[background task ${task.id} "${task.description}" appears to be waiting for interactive input]\n` +
-                  `last output:\n${tail.trimEnd()}\n\n` +
+                  `last output:\n${safeTail}\n\n` +
                   `The command is likely blocked on a prompt. Kill it with ${shared.toolName("task_kill")} and re-run non-interactively ` +
                   `(e.g. pipe input like \`echo y | cmd\`, or pass a --yes/--force flag).`,
               )

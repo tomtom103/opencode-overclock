@@ -47,6 +47,9 @@ export interface TasksOptions {
   stallThresholdMs?: number
   stallCheckIntervalMs?: number
   tmux?: boolean
+  sanitizeEnv?: boolean
+  envAllowlist?: string[]
+  maxTasks?: number
   [key: string]: unknown
 }
 
@@ -68,11 +71,35 @@ export interface GuardHookConfig {
   [key: string]: unknown
 }
 
+export interface FloorGuardOptions {
+  allowSkips?: boolean
+  allowSuppressions?: boolean
+  allowAssertionRemoval?: boolean
+  [key: string]: unknown
+}
+
 export interface GuardOptions {
   hooks?: GuardHookConfig[]
   recipes?: string[]
   auto?: boolean
   editRecovery?: boolean
+  floorGuard?: boolean | FloorGuardOptions
+  [key: string]: unknown
+}
+
+export interface SafetyOptions {
+  blockDestructiveGit?: boolean
+  allowForcePush?: boolean
+  allowStashDrop?: boolean
+  customPatterns?: { name: string; pattern: string; reason: string }[]
+  [key: string]: unknown
+}
+
+export interface WorkflowOptions {
+  enabled?: boolean
+  commands?: boolean
+  subagents?: boolean
+  skillsPath?: string
   [key: string]: unknown
 }
 
@@ -108,6 +135,8 @@ export interface OverclockOptions {
   guard?: boolean | GuardOptions
   usage?: boolean | { debounceMs?: number }
   buddy?: boolean
+  safety?: boolean | SafetyOptions
+  workflow?: boolean | WorkflowOptions
   recovery?: boolean | RecoveryOptions
   truncator?: boolean | TruncatorOptions
   /** Legacy or grouped feature options: { features: { guard: ... } } */

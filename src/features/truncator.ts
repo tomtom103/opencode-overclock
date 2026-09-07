@@ -15,6 +15,7 @@ export interface TruncateResult {
 
 /**
  * Smartly truncate output preserving top context and bottom tail.
+ * Enforces strict character and line bounds so oversized lines never overflow context.
  */
 export function truncateOutput(
   content: string,
@@ -22,16 +23,23 @@ export function truncateOutput(
   headLinesCount = DEFAULT_HEAD_LINES,
   tailLinesCount = DEFAULT_TAIL_LINES,
 ): TruncateResult {
-  if (content.length <= maxChars) {
+  const effectiveMax = Math.max(100, maxChars)
+  if (content.length <= effectiveMax) {
     return { text: content, truncated: false, omittedLines: 0, omittedChars: 0 }
   }
 
+  const headCount = Math.max(0, headLinesCount)
+  const tailCount = Math.max(0, tailLinesCount)
   const lines = content.split("\n")
-  if (lines.length <= headLinesCount + tailLinesCount) {
+
+  const maxHeadChars = Math.floor(effectiveMax * 0.3)
+  const maxTailChars = Math.floor(effectiveMax * 0.7)
+
+  if (lines.length <= headCount + tailCount) {
     // If few lines but very long strings, hard slice
-    const head = content.slice(0, Math.floor(maxChars * 0.3))
-    const tail = content.slice(-Math.floor(maxChars * 0.7))
-    const omittedChars = content.length - head.length - tail.length
+    const head = content.slice(0, maxHeadChars)
+    const tail = maxTailChars > 0 ? content.slice(-maxTailChars) : ""
+    const omittedChars = Math.max(0, content.length - head.length - tail.length)
     return {
       text: `${head}\n\n[... truncated ${omittedChars} characters to stay within context limits ...]\n\n${tail}`,
       truncated: true,
@@ -40,10 +48,19 @@ export function truncateOutput(
     }
   }
 
-  const head = lines.slice(0, headLinesCount).join("\n")
-  const tail = lines.slice(-tailLinesCount).join("\n")
-  const omittedLines = lines.length - headLinesCount - tailLinesCount
-  const omittedChars = content.length - head.length - tail.length
+  let head = headCount > 0 ? lines.slice(0, headCount).join("\n") : ""
+  let tail = tailCount > 0 ? lines.slice(-tailCount).join("\n") : ""
+
+  // Guard against giant single lines in head or tail violating maxChars limit
+  if (head.length > maxHeadChars) {
+    head = head.slice(0, maxHeadChars) + "\n... [line truncated]"
+  }
+  if (tail.length > maxTailChars) {
+    tail = "[line truncated] ...\n" + (maxTailChars > 0 ? tail.slice(-maxTailChars) : "")
+  }
+
+  const omittedLines = Math.max(0, lines.length - headCount - tailCount)
+  const omittedChars = Math.max(0, content.length - head.length - tail.length)
 
   const text = `${head}\n\n[... truncated ${omittedLines} lines (${omittedChars} chars) to stay within context limits ...]\n\n${tail}`
   return {

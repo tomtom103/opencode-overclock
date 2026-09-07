@@ -24,8 +24,8 @@ export function mergeHooks(parts: Partial<Hooks>[], policy: ToolPolicy = EMPTY_P
         }
         continue
       }
-      const prev = merged[key] as ((...a: unknown[]) => Promise<void>) | undefined
-      const next = value as (...a: unknown[]) => Promise<void>
+      const prev = merged[key] as ((...a: unknown[]) => Promise<unknown>) | undefined
+      const next = value as (...a: unknown[]) => Promise<unknown>
       merged[key] = prev
         ? async (...args: unknown[]) => {
             if (key === "dispose") {
@@ -37,8 +37,22 @@ export function mergeHooks(parts: Partial<Hooks>[], policy: ToolPolicy = EMPTY_P
               )
               return
             }
-            await prev(...args)
-            await next(...args)
+            if (key === "event") {
+              try {
+                await prev(...args)
+              } catch (e) {
+                console.warn(`[overclock] event error: ${e}`)
+              }
+              try {
+                await next(...args)
+              } catch (e) {
+                console.warn(`[overclock] event error: ${e}`)
+              }
+              return
+            }
+            const prevRes = await prev(...args)
+            const nextRes = await next(...args)
+            return nextRes !== undefined ? nextRes : prevRes
           }
         : next
     }

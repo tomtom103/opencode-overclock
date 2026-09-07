@@ -1,0 +1,256 @@
+import { existsSync } from "node:fs"
+import { resolve, dirname } from "node:path"
+import { fileURLToPath } from "node:url"
+import type { FeatureModule, WorkflowOptions } from "../core/types.ts"
+import { DEFINE_TEMPLATE } from "../workflow/templates/define.ts"
+import { PLAN_TEMPLATE } from "../workflow/templates/plan.ts"
+import { BUILD_TEMPLATE } from "../workflow/templates/build.ts"
+import { DIAGNOSE_TEMPLATE } from "../workflow/templates/diagnose.ts"
+import { SHIP_TEMPLATE } from "../workflow/templates/ship.ts"
+import { STANDARDS_REVIEWER_PROMPT } from "../workflow/agents/standards-reviewer.ts"
+import { SPEC_REVIEWER_PROMPT } from "../workflow/agents/spec-reviewer.ts"
+import { SECURITY_AUDITOR_PROMPT } from "../workflow/agents/security-auditor.ts"
+import { TEST_ENGINEER_PROMPT } from "../workflow/agents/test-engineer.ts"
+import { PERFORMANCE_AUDITOR_PROMPT } from "../workflow/agents/performance-auditor.ts"
+import { DOUBT_REVIEWER_PROMPT } from "../workflow/agents/doubt-reviewer.ts"
+import { CODEBASE_RESEARCHER_PROMPT } from "../workflow/agents/codebase-researcher.ts"
+import { DESIGN_EXPLORER_PROMPT } from "../workflow/agents/design-explorer.ts"
+import { ENGINEERING_COACH_PROMPT } from "../workflow/agents/engineering-coach.ts"
+
+function getBundledSkillsDir(customPath?: string): string {
+  if (customPath) return customPath
+  const currentDir =
+    typeof import.meta.dir === "string" ? import.meta.dir : dirname(fileURLToPath(import.meta.url))
+  return resolve(currentDir, "../../skills")
+}
+
+export const WORKFLOW_COMMANDS = {
+  define: {
+    description: "Interrogate requirements and draft SPEC.md with recommended defaults",
+    template: DEFINE_TEMPLATE,
+  },
+  plan: {
+    description: "Decompose spec into vertical tracer-bullet tasks in tasks/plan.md",
+    template: PLAN_TEMPLATE,
+  },
+  build: {
+    description: "Autonomous TDD implementation with tripwires and atomic commits",
+    template: BUILD_TEMPLATE,
+  },
+  diagnose: {
+    description: "Disciplined bug reproduction and isolation loop ([DEBUG-xxxx] tags)",
+    template: DIAGNOSE_TEMPLATE,
+  },
+  ship: {
+    description: "3-way parallel review (Standards, Spec, Security) with GO/NO-GO verdict",
+    template: SHIP_TEMPLATE,
+  },
+}
+
+export const WORKFLOW_AGENTS = {
+  "standards-reviewer": {
+    mode: "subagent" as const,
+    description: "Senior Staff Engineer auditing diffs for repo conventions and code smells",
+    prompt: STANDARDS_REVIEWER_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+  "spec-reviewer": {
+    mode: "subagent" as const,
+    description: "Product Engineer auditing diffs strictly against originating specifications",
+    prompt: SPEC_REVIEWER_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+  "security-auditor": {
+    mode: "subagent" as const,
+    description: "Adversarial Security Engineer auditing diffs for OWASP vulnerabilities and secrets",
+    prompt: SECURITY_AUDITOR_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+  "test-engineer": {
+    mode: "subagent" as const,
+    description: "QA Engineer auditing test strategy, coverage gaps, and Prove-It verification",
+    prompt: TEST_ENGINEER_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+  "performance-auditor": {
+    mode: "subagent" as const,
+    description: "Senior Performance Engineer auditing latency, N+1 queries, and resource leaks",
+    prompt: PERFORMANCE_AUDITOR_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+  "doubt-reviewer": {
+    mode: "subagent" as const,
+    description: "Adversarial Verification Engineer evaluating artifacts without author bias",
+    prompt: DOUBT_REVIEWER_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+  "codebase-researcher": {
+    mode: "subagent" as const,
+    description: "Scout Agent tracing seams, dependencies, and call graphs without polluting context",
+    prompt: CODEBASE_RESEARCHER_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+  "design-explorer": {
+    mode: "subagent" as const,
+    description: "Principal Architect producing contrasting 'Design It Twice' interface proposals",
+    prompt: DESIGN_EXPLORER_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+  "engineering-coach": {
+    mode: "subagent" as const,
+    description: "Elite Staff Mentor providing Socratic debugging guidance and design critique",
+    prompt: ENGINEERING_COACH_PROMPT,
+    tools: {
+      write: false,
+      edit: false,
+    },
+    permission: {
+      edit: "deny" as const,
+    },
+  },
+}
+
+export const workflow: FeatureModule = {
+  name: "workflow",
+  defaultEnabled: true,
+  tools: [],
+  async init(_ctx, options) {
+    const opts = (options ?? {}) as WorkflowOptions
+    if (opts.enabled === false) {
+      return {}
+    }
+
+    const skillsPath = getBundledSkillsDir(opts.skillsPath)
+
+    return {
+      config: async (cfg: any) => {
+        if (opts.commands !== false) {
+          cfg.command = {
+            ...WORKFLOW_COMMANDS,
+            ...(cfg.command ?? {}),
+          }
+        }
+
+        if (opts.subagents !== false) {
+          cfg.agent = {
+            ...WORKFLOW_AGENTS,
+            ...(cfg.agent ?? {}),
+          }
+        }
+
+        if (existsSync(skillsPath)) {
+          cfg.skills = typeof cfg.skills === "object" && cfg.skills !== null ? cfg.skills : {}
+          if (!Array.isArray(cfg.skills.paths)) {
+            cfg.skills.paths = []
+          }
+          if (!cfg.skills.paths.includes(skillsPath)) {
+            cfg.skills.paths.push(skillsPath)
+          }
+        }
+      },
+    }
+  },
+
+  setup: async (v2Context, options) => {
+    const opts = (options ?? {}) as WorkflowOptions
+    if (opts.enabled === false) return
+
+    if (opts.commands !== false && v2Context.command?.transform) {
+      await v2Context.command.transform(async (draft) => {
+        for (const [name, cmd] of Object.entries(WORKFLOW_COMMANDS)) {
+          draft.update(name, (current) => {
+            current.name = current.name ?? name
+            current.description = current.description ?? cmd.description
+            current.template = current.template ?? cmd.template
+          })
+        }
+      })
+    }
+
+    if (opts.subagents !== false && v2Context.agent?.transform) {
+      await v2Context.agent.transform(async (draft) => {
+        for (const [id, ag] of Object.entries(WORKFLOW_AGENTS)) {
+          draft.update(id, (current) => {
+            current.mode = current.mode ?? ag.mode
+            current.description = current.description ?? ag.description
+            current.system = current.system ?? ag.prompt
+            if (ag.permission?.edit === "deny") {
+              const perms = (current.permissions as any[]) ?? []
+              const hasDenyEdit = perms.some((p: any) => p.action === "edit" && p.effect === "deny")
+              if (!hasDenyEdit) {
+                perms.push({
+                  action: "edit",
+                  resource: "*",
+                  effect: "deny",
+                })
+                current.permissions = perms as any
+              }
+            }
+          })
+        }
+      })
+    }
+
+    const skillsPath = getBundledSkillsDir(opts.skillsPath)
+    if (existsSync(skillsPath) && v2Context.skill?.transform) {
+      await v2Context.skill.transform(async (draft) => {
+        const existing = draft.list?.() ?? []
+        const alreadyAdded = existing.some((s: any) => s.type === "directory" && s.path === skillsPath)
+        if (!alreadyAdded) {
+          draft.source({
+            type: "directory",
+            path: skillsPath,
+          } as any)
+        }
+      })
+    }
+  },
+}

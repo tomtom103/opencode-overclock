@@ -4,6 +4,7 @@ import {
   createTaskManager,
   looksLikePrompt,
   detectInteractiveCommand,
+  readLogTail,
   type TaskRecord,
   type TaskManager,
 } from "../src/features/tasks.ts"
@@ -184,5 +185,78 @@ describe("stall watchdog", () => {
     expect(detectInteractiveCommand("python3 script.py")).toBeNull()
     expect(detectInteractiveCommand("node index.js")).toBeNull()
     expect(detectInteractiveCommand("echo hi")).toBeNull()
+  })
+
+  test("output safely bounds memory on huge outputs and handles negative/zero tailLines", async () => {
+    const dir = logDir()
+    const mgr = createTaskManager({ logDir: dir })
+    const rec = mgr.run({
+      command: 'for i in $(seq 1 100); do echo "line $i"; done',
+      description: "lines",
+      cwd: "/tmp",
+      sessionID: "s-lines",
+    })
+
+    await waitFor(
+      async () => (await Bun.file(rec.logPath).exists()) && mgr.get(rec.id)?.status === "exited",
+    )
+
+    // Negative tailLines should clamp safely to 1 line, not slice from the start
+    const neg = await mgr.output(rec.id, -5)
+    expect(neg).toBe("line 100")
+
+    // Zero tailLines should clamp safely to 1 line
+    const zero = await mgr.output(rec.id, 0)
+    expect(zero).toBe("line 100")
+
+    // Positive tailLines
+    const tail5 = await mgr.output(rec.id, 5)
+    expect(tail5).toContain("line 96")
+    expect(tail5).toContain("line 100")
+    expect(tail5).not.toContain("line 95")
+  })
+
+  test("prunes finished tasks when maxTasks is exceeded", async () => {
+    const dir = logDir()
+    const mgr = createTaskManager({ logDir: dir, maxTasks: 3 })
+    for (let i = 1; i <= 5; i++) {
+      await runToExit(`echo task-${i}`, { timeoutMs: 500 })
+    }
+    const t1 = mgr.run({ command: "echo t1", description: "1", cwd: "/tmp", sessionID: "s" })
+    await waitFor(async () => mgr.get(t1.id)?.status === "exited")
+    const t2 = mgr.run({ command: "echo t2", description: "2", cwd: "/tmp", sessionID: "s" })
+    await waitFor(async () => mgr.get(t2.id)?.status === "exited")
+    const t3 = mgr.run({ command: "echo t3", description: "3", cwd: "/tmp", sessionID: "s" })
+    await waitFor(async () => mgr.get(t3.id)?.status === "exited")
+    const t4 = mgr.run({ command: "echo t4", description: "4", cwd: "/tmp", sessionID: "s" })
+    await waitFor(async () => mgr.get(t4.id)?.status === "exited")
+
+    expect(mgr.list().length).toBeLessThanOrEqual(3)
+  })
+
+  test("completion reporting retains log output even under aggressive maxTasks pruning", async () => {
+    const dir = logDir()
+    const exits: { id: string; tail: string }[] = []
+    const mgr = createTaskManager({
+      logDir: dir,
+      maxTasks: 1,
+      onExit: async (task) => {
+        const tail = await readLogTail(task.logPath, 5)
+        exits.push({ id: task.id, tail })
+      },
+    })
+
+    const t1 = mgr.run({ command: 'echo "output-t1"', description: "1", cwd: "/tmp", sessionID: "s" })
+    const t2 = mgr.run({ command: 'echo "output-t2"', description: "2", cwd: "/tmp", sessionID: "s" })
+
+    await waitFor(async () => exits.length === 2)
+
+    const exit1 = exits.find((e) => e.id === t1.id)
+    const exit2 = exits.find((e) => e.id === t2.id)
+
+    expect(exit1?.tail).toContain("output-t1")
+    expect(exit1?.tail).not.toContain("no task")
+    expect(exit2?.tail).toContain("output-t2")
+    expect(exit2?.tail).not.toContain("no task")
   })
 })

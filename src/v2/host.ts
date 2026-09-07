@@ -71,6 +71,7 @@ export function createV2Host(ctx: PluginInput, options: OverclockOptions = {}): 
         },
 
         "experimental.chat.system.transform": async (_input, output) => {
+          if (!output || !Array.isArray(output.system)) return
           if (handle.state.references.size === 0) return
           const refLines: string[] = ["# References"]
           for (const [name, ref] of handle.state.references) {
@@ -86,14 +87,16 @@ export function createV2Host(ctx: PluginInput, options: OverclockOptions = {}): 
         },
 
         "chat.params": async (input, output) => {
+          if (!output) return
           if (handle.state.aisdkHooks.sdk.size === 0) return
+          output.options = output.options ?? {}
           const sdkPayload = {
             model: {
               id: (input.model as any)?.id ?? (input.model as any)?.name ?? "unknown",
               providerID: (input.provider as any)?.id ?? "unknown",
             },
             package: "@ai-sdk/provider",
-            options: output.options ?? {},
+            options: output.options,
           }
           for (const hook of handle.state.aisdkHooks.sdk) {
             try {

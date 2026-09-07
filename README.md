@@ -13,15 +13,17 @@ opencode plugin -g opencode-overclock    # every project
 
 ## What you get
 
-| Module      | What it does                                                                                                                                                  | Tools it adds                                       |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `tasks`     | Run shell commands in the background. The agent gets the result posted back into the session when they finish, and a nudge if one blocks on a prompt.         | `task_run` `task_status` `task_output` `task_kill`  |
-| `sched`     | Recurring prompts on a cron expression or an interval (`"5m"`). Survives restarts; an interval on the current session makes a loop.                           | `schedule_create` `schedule_list` `schedule_delete` |
-| `guard`     | Your own quality gates: run a command after the agent edits files, and feed failures back to it once the session goes idle. Built-in recipes & edit recovery. | —                                                   |
-| `recovery`  | Automatically heal provider errors (missing tool results, thinking block sequencing, context limit) and auto-resume sessions.                                 | —                                                   |
-| `truncator` | Context-protecting smart output truncation for high-volume tools (`task_output`, `bash`, `grep`, `glob`, `webfetch`) preserving header & tail diagnostics.    | —                                                   |
-| `usage`     | Per-day and per-session cost and token totals, collected from the event bus (accessible via TUI `/oc-usage`).                                                 | —                                                   |
-| `buddy`     | An ASCII pet next to the prompt that reacts to what the session is doing. Purely cosmetic.                                                                    | —                                                   |
+| Module      | What it does                                                                                                                                                           | Tools it adds                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `workflow`  | 5 lifecycle commands (`/define`, `/plan`, `/build`, `/diagnose`, `/ship`), 9 sandboxed subagents, and 9 bundled engineering skills (`tdd`, `grilling`, `doubt`, etc.). | —                                                   |
+| `safety`    | Blocks destructive git operations (`git reset --hard`, force-push, `clean -f`, `branch -D`, `stash drop`) in `bash` tool calls before they run.                        | —                                                   |
+| `tasks`     | Run shell commands in the background. The agent gets the result posted back into the session when they finish, and a nudge if one blocks on a prompt.                  | `task_run` `task_status` `task_output` `task_kill`  |
+| `sched`     | Recurring prompts on a cron expression or an interval (`"5m"`). Survives restarts; an interval on the current session makes a loop.                                    | `schedule_create` `schedule_list` `schedule_delete` |
+| `guard`     | Your own quality gates: run a command after the agent edits files, feed failures back on idle, edit recovery hints, and `floorGuard` anti-bypass protection.           | —                                                   |
+| `recovery`  | Automatically heal provider errors (missing tool results, thinking block sequencing, context limit) and auto-resume sessions.                                          | —                                                   |
+| `truncator` | Context-protecting smart output truncation for high-volume tools (`task_output`, `bash`, `grep`, `glob`, `webfetch`) preserving header & tail diagnostics.             | —                                                   |
+| `usage`     | Per-day and per-session cost and token totals, collected from the event bus (accessible via TUI `/oc-usage`).                                                          | —                                                   |
+| `buddy`     | An ASCII pet next to the prompt that reacts to what the session is doing. Purely cosmetic.                                                                             | —                                                   |
 
 On top of the tools, the TUI side adds desktop notifications when a turn finishes or the agent
 needs you, plus `/oc-tasks`, `/oc-usage`, `/oc-schedules`, `/oc-buddy` (pet), `/oc-buddy-switch` (choose species), and `/oc-buddy-cycle` (next species).
@@ -88,14 +90,58 @@ To turn an individual feature off:
 }
 ```
 
-| Module           | Options                                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `tasks`          | `killOnExit` bool · `stallDetection` bool · `stallThresholdMs` num · `stallCheckIntervalMs` num · `tmux` bool    |
-| `sched`          | `skipIfBusy` bool                                                                                                |
-| `guard`          | `hooks` array · `recipes` array (`["tsc", "eslint", "cargo", "ruff", "go"]`) · `auto` bool · `editRecovery` bool |
-| `recovery`       | `maxAttempts` num · `cooldownMs` num · `autoResume` bool                                                         |
-| `truncator`      | `maxChars` num · `tools` array · `headLines` num · `tailLines` num                                               |
-| `usage`, `buddy` | —                                                                                                                |
+| Module           | Options                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `workflow`       | `enabled` bool · `commands` bool · `subagents` bool · `skillsPath` string                                                                  |
+| `safety`         | `blockDestructiveGit` bool · `allowForcePush` bool · `allowStashDrop` bool · `customPatterns` array                                        |
+| `guard`          | `hooks` array · `recipes` array (`["tsc", "eslint", "cargo", "ruff", "go"]`) · `auto` bool · `editRecovery` bool · `floorGuard` bool / obj |
+| `tasks`          | `killOnExit` bool · `stallDetection` bool · `stallThresholdMs` num · `stallCheckIntervalMs` num · `tmux` bool                              |
+| `sched`          | `skipIfBusy` bool                                                                                                                          |
+| `recovery`       | `maxAttempts` num · `cooldownMs` num · `autoResume` bool                                                                                   |
+| `truncator`      | `maxChars` num · `tools` array · `headLines` num · `tailLines` num                                                                         |
+| `usage`, `buddy` | —                                                                                                                                          |
+
+### Engineering harness & workflows (`workflow`)
+
+Overclock bundles a structured software engineering harness that elevates opencode from a code generator into an elite engineering partner.
+
+#### 1. Lifecycle Commands (The "When")
+
+| Command     | Purpose                                                                                                                            |
+| :---------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| `/define`   | Structured inquiry via `grilling` and `domain-modeling`, or direct specification synthesis (`to-spec`) into `SPEC.md`.             |
+| `/plan`     | Decomposes `SPEC.md` into vertical tracer bullets (`to-tickets`) with dependency DAGs and expand/contract migration branches.      |
+| `/build`    | Autonomous TDD implementation (`tdd`) with stop-the-line tripwires (halts on 3 consecutive test failures or schema changes).       |
+| `/diagnose` | Disciplined 6-phase defect isolation loop with automated reproductions, tagged logging (`[DEBUG-xxxx]`), and regression tests.     |
+| `/ship`     | Pre-launch gatekeeper running a parallel 4-way subagent audit across uncommitted, staged, and branch diffs with GO/NO-GO verdicts. |
+
+#### 2. Bundled Engineering Skills (The "How")
+
+Auto-discovered by opencode's `skill` tool when relevant:
+
+- `tdd`: Test-driven development loop enforcing public seam tests before implementation and the Prove-It bug pattern.
+- `grilling`: Requirements interrogation on the decision dependency frontier with opinionated defaults (`➡️ **Recommended:**`).
+- `domain-modeling`: Ubiquitous language management (`CONTEXT.md`) and Architecture Decision Records (`ADR-FORMAT.md`).
+- `to-spec`: Fast requirements synthesis into `SPEC.md` without reopening interview loops.
+- `to-tickets`: Context-sized DAG task planning with expand-and-contract branches for wide refactors.
+- `codebase-design`: Deep module architecture (Ousterhout), 4 dependency categories, and "Design It Twice" exploration.
+- `diagnosing-bugs`: Systematic defect reproduction, ranked hypotheses, secret redaction, and tagged probes.
+- `doubt`: Adversarial verification where artifacts are audited against contracts without author confirmation bias.
+- `source-discipline`: Grounding framework code in official, version-matched documentation.
+
+#### 3. Sandboxed Worker Subagents (The "Who")
+
+Specialized leaf subagents invoked via the `task` tool with **enforced read-only tool sandboxing** (`tools: { write: false, edit: false }`, `permission: { edit: "deny" }`):
+
+- `codebase-researcher`: Scout tracing call graphs, seams, and dependencies without cluttering orchestrator context.
+- `design-explorer`: Architect formulating contrasting minimalist vs extensible interface proposals ("Design It Twice").
+- `doubt-reviewer`: Adversarial verifier probing race conditions, error bounds, and silent assumptions.
+- `standards-reviewer`: Senior reviewer auditing code diffs against Martin Fowler's code smells and repo idioms.
+- `spec-reviewer`: Product reviewer ensuring strict compliance with `SPEC.md` and zero unrequested scope creep.
+- `security-auditor`: Adversarial security engineer auditing diffs for OWASP Top 10 flaws and secret hygiene.
+- `test-engineer`: QA engineer assessing test coverage gaps, assertion quality, and mocking boundaries.
+- `performance-auditor`: Performance engineer identifying N+1 queries, unbounded memory, and latency bottlenecks.
+- `engineering-coach`: Elite staff mentor providing Socratic debugging guidance and architectural critique.
 
 ### Quality gates (`guard`)
 

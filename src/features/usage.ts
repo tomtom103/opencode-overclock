@@ -12,6 +12,8 @@ export interface SessionUsage {
 }
 
 const RETENTION_DAYS = 60
+const MAX_SEEN_PER_DAY = 1000
+const MAX_TRACKED_SESSIONS = 200
 
 function zeroTokens(): UsageTokens {
   return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
@@ -73,6 +75,7 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
   }
 
   async function flush(): Promise<void> {
+    pruneOldDays(state, Date.now())
     await writeJson(opts.statePath, state)
   }
 
@@ -93,6 +96,13 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
 
   function onEvent(event: { type: string; properties?: unknown }): void {
     try {
+      if (event.type === "session.deleted") {
+        const props = event.properties as { sessionID?: string; info?: { id?: string } } | undefined
+        const id = props?.sessionID ?? props?.info?.id
+        if (id) sessions.delete(id)
+        return
+      }
+
       if (event.type !== "message.updated") return
       const info = (event.properties as any)?.info
       if (!info || info.role !== "assistant" || !info.time?.completed) return
@@ -103,6 +113,10 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
       const bucket = state.days[day] ?? emptyBucket()
       state.days[day] = bucket
       if (bucket.seen.includes(info.id)) return
+
+      if (bucket.seen.length >= MAX_SEEN_PER_DAY) {
+        bucket.seen = bucket.seen.slice(-MAX_SEEN_PER_DAY + 1)
+      }
       bucket.seen.push(info.id)
 
       const cost = info.cost ?? 0
@@ -125,6 +139,12 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
       sess.tokens.input += tok.input
       sess.tokens.output += tok.output
       sessions.set(info.sessionID, sess)
+
+      if (sessions.size > MAX_TRACKED_SESSIONS) {
+        // Evict oldest session to bound memory
+        const oldest = sessions.keys().next().value
+        if (oldest) sessions.delete(oldest)
+      }
 
       scheduleFlush()
     } catch (e) {
