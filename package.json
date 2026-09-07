@@ -1,6 +1,6 @@
 {
   "name": "opencode-overclock",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Power-ups for opencode: background tasks, cron scheduling, quality-gate hooks, usage telemetry, and companion. Modular, toggleable.",
   "type": "module",
   "repository": {
