@@ -785,4 +785,30 @@ describe("guard module", () => {
     expect(output.output).toContain("[overclock floor-guard warning]")
     expect(output.output).toContain("Skipping test execution")
   })
+
+  test("checkFloorViolation resolves renamed edit/write tool ids", () => {
+    const resolveTool = (n: string) => (n === "edit" ? "custom_edit" : n)
+    const violation = checkFloorViolation(
+      "custom_edit",
+      {
+        filePath: "tests/math.test.ts",
+        oldString: "test('add', () => { expect(1+1).toBe(2) })",
+        newString: "test.skip('add', () => { expect(1+1).toBe(2) })",
+      },
+      {},
+      resolveTool,
+    )
+    expect(violation).not.toBeNull()
+    expect(violation).toContain("Skipping test execution")
+  })
+
+  test("checkFloorViolation covers apply_patch payloads", () => {
+    const violation = checkFloorViolation(
+      "apply_patch",
+      { filePath: "src/calc.ts", patch: "// eslint-disable-next-line\nconst a = 1" },
+      {},
+    )
+    expect(violation).not.toBeNull()
+    expect(violation).toContain("ESLint diagnostic suppression")
+  })
 })

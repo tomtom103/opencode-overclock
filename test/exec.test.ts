@@ -177,6 +177,13 @@ describe("execBash", () => {
     expect(res.code).not.toBe(0)
   })
 
+  test("truncates stdout/stderr beyond maxBytes with marker", async () => {
+    const res = await execBash("seq 1 20000", { maxBytes: 100 })
+    expect(res.stdout.length).toBeLessThan(20000)
+    expect(res.stdout).toContain("[truncated: output exceeded capture limit]")
+    expect(res.code).toBe(0)
+  })
+
   test("killProcessTree recursively kills child and grandchild processes", async () => {
     const leafScript = "console.log(JSON.stringify({leaf:process.pid})); setInterval(()=>{}, 1000)"
     const midScript = `Bun.spawn([process.execPath, "-e", ${JSON.stringify(leafScript)}], { stdout: "inherit", stderr: "ignore" }); setInterval(()=>{}, 1000)`

@@ -10,11 +10,13 @@ import { redactSensitiveOutput } from "../lib/exec.ts"
 import {
   isSpaShell,
   isCloudMetadataHost,
+  isPrivateHostname,
   validateBrowserUrl,
+  safeFetch,
   crawlSite,
 } from "../lib/browser/crawler.ts"
 
-export { isSpaShell, isCloudMetadataHost, validateBrowserUrl }
+export { isSpaShell, isCloudMetadataHost, isPrivateHostname, validateBrowserUrl, safeFetch }
 
 const z = tool.schema
 
@@ -109,7 +111,8 @@ export const browser: FeatureModule = {
           timeout: z.number().optional().describe("Navigation timeout in seconds (default: 15)"),
         },
         async execute(args) {
-          const validation = validateBrowserUrl(args.url)
+          const policy = { allowPrivateNetwork: opts.allowPrivateNetwork === true }
+          const validation = validateBrowserUrl(args.url, policy)
           if (!validation.ok) {
             return `Error fetching ${args.url}: ${validation.error}`
           }
@@ -123,14 +126,18 @@ export const browser: FeatureModule = {
           // Fast HTTP fetch attempt (Firecrawl pattern)
           try {
             const fastFetchTimeout = Math.min(5000, timeoutMs)
-            const response = await fetch(args.url, {
-              signal: AbortSignal.timeout(fastFetchTimeout),
-              headers: {
-                "User-Agent":
-                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            const response = await safeFetch(
+              args.url,
+              {
+                signal: AbortSignal.timeout(fastFetchTimeout),
+                headers: {
+                  "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                },
               },
-            })
+              policy,
+            )
 
             if (response.ok) {
               const contentType = response.headers.get("content-type") || ""
@@ -281,7 +288,9 @@ export const browser: FeatureModule = {
               if (!args.url || args.url.trim().length === 0) {
                 return "Error: Action 'navigate' requires 'url' parameter."
               }
-              const validation = validateBrowserUrl(args.url)
+              const validation = validateBrowserUrl(args.url, {
+                allowPrivateNetwork: opts.allowPrivateNetwork === true,
+              })
               if (!validation.ok) {
                 return `Error: ${validation.error}`
               }
@@ -663,7 +672,10 @@ export const browser: FeatureModule = {
           .describe("Only discover links via sitemap.xml"),
       },
       async execute(args) {
-        return await crawlSite(args, { manager })
+        return await crawlSite(
+          { ...args, allowPrivateNetwork: opts.allowPrivateNetwork === true },
+          { manager },
+        )
       },
     })
 

@@ -122,11 +122,16 @@ export const safety: FeatureModule = {
 
     const patterns = resolvePatterns(opts)
     const bashToolName = shared?.toolName ? shared.toolName("bash").toLowerCase() : "bash"
+    const taskRunToolName = shared?.toolName ? shared.toolName("task_run").toLowerCase() : "task_run"
 
     return {
       "tool.execute.before": async (input, output) => {
         const toolLower = input.tool.toLowerCase()
-        if (toolLower !== "bash" && toolLower !== bashToolName) return
+        // Cover both the foreground shell and the background runner: task_run
+        // spawns `bash -c` via Bun.spawn, bypassing a bash-only hook.
+        const isBash = toolLower === "bash" || toolLower === bashToolName
+        const isTaskRun = toolLower === "task_run" || toolLower === taskRunToolName
+        if (!isBash && !isTaskRun) return
 
         const args = output.args as Record<string, unknown> | undefined
         if (!args || typeof args.command !== "string") return

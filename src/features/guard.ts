@@ -114,9 +114,24 @@ export function checkFloorViolation(
   tool: string,
   args: Record<string, unknown> | undefined,
   options: FloorGuardOptions = {},
+  resolveTool?: (name: string) => string,
 ): string | null {
+  // Resolve renamed tools both ways: hook may see the model-visible name
+  // (e.g. "my_edit") while config declares "edit", or vice versa.
   const toolLower = tool.toLowerCase()
-  if (toolLower !== "edit" && toolLower !== "write") return null
+  const candidates = new Set([toolLower])
+  if (resolveTool) {
+    for (const declared of ["edit", "write", "apply_patch"]) {
+      const visible = resolveTool(declared).toLowerCase()
+      candidates.add(visible)
+      // If input matches a visible name, also accept the declared name
+      if (visible === toolLower) candidates.add(declared)
+    }
+  }
+  const isEdit = candidates.has("edit")
+  const isWrite = candidates.has("write")
+  const isApplyPatch = candidates.has("apply_patch")
+  if (!isEdit && !isWrite && !isApplyPatch) return null
   if (!args) return null
 
   const filePath =
@@ -130,7 +145,7 @@ export function checkFloorViolation(
 
   const isTest = isTestFile(filePath)
 
-  if (toolLower === "edit") {
+  if (isEdit) {
     const oldStr = typeof args.oldString === "string" ? args.oldString : ""
     const newStr = typeof args.newString === "string" ? args.newString : ""
 
@@ -153,8 +168,18 @@ export function checkFloorViolation(
         return `Stripped test assertion(s) from ${filePath || "test file"} without replacement. Deleting assertions to make tests pass is prohibited by floor-guard policy. Fix the implementation to satisfy the assertion.`
       }
     }
-  } else if (toolLower === "write") {
-    const content = typeof args.content === "string" ? args.content : ""
+  } else if (isWrite || isApplyPatch) {
+    const content =
+      typeof args.content === "string"
+        ? args.content
+        : // apply_patch-style payloads carry the new file text under various keys
+          typeof args.newString === "string"
+          ? args.newString
+          : typeof args.text === "string"
+            ? args.text
+            : typeof args.patch === "string"
+              ? args.patch
+              : ""
 
     for (const v of FLOOR_VIOLATIONS) {
       if (v.testFileOnly && !isTest) continue
@@ -612,6 +637,7 @@ export const guard: FeatureModule = {
             input.tool,
             input.args as Record<string, unknown> | undefined,
             floorGuardOpts,
+            shared?.toolName,
           )
           if (violation) {
             output.output += `\n\n[overclock floor-guard warning]\n${violation}`

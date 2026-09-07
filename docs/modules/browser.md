@@ -143,9 +143,22 @@ Overclock attaches directly to your live Chrome instance, inheriting all cookies
           "idleTimeoutMs": 300000, // Auto-close after 5 min idle
           "overrideWebfetch": true, // Replace built-in webfetch
           "artifactsDir": ".opencode/browser/screenshots",
+          "allowPrivateNetwork": false, // Opt in to reach 127.0.0.1 / RFC1918 dev servers
         },
       },
     ],
   ],
 }
 ```
+
+### URL Safety Policy
+
+`webfetch`, `browser navigate`, and `crawl` validate every URL before fetching:
+
+- Cloud metadata hosts (`169.254.169.254`, `169.254.170.2`, `metadata.google.internal`)
+  are always blocked.
+- Loopback, RFC1918, link-local, and other private targets (`127.0.0.1`, `10/8`,
+  `192.168/16`, `172.16/12`, `localhost`, decimal/hex IP encodings) are blocked by
+  default. Set `allowPrivateNetwork: true` to reach local dev servers.
+- Redirects are followed manually (max 5 hops) and re-validated on every hop, so a
+  public URL cannot bounce into metadata or private space.

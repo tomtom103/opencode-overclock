@@ -149,7 +149,7 @@ export async function readLogTail(logPath: string, tailLines = 50): Promise<stri
   const s = await stat(logPath).catch(() => null)
   if (!s || s.size === 0) return "(no output)"
 
-  const effectiveTail = Math.max(1, tailLines)
+  const effectiveTail = Math.max(1, Math.floor(tailLines) || 1)
   // Cap read window to last 512KB to prevent memory exhaustion on giant log files
   const maxBytes = 512 * 1024
   const start = Math.max(0, s.size - maxBytes)
@@ -342,7 +342,10 @@ export function createTaskManager(opts: {
     output: async (id, tailLines = 50) => {
       const e = tasks.get(id)
       if (!e) return `no task ${id}`
-      return readLogTail(e.logPath, tailLines)
+      // Clamp negatives/zero/NaN to a single line; cap the top end.
+      const requested = Math.floor(tailLines)
+      const capped = !Number.isFinite(requested) ? 50 : Math.min(200, Math.max(1, requested))
+      return redactSensitiveOutput(await readLogTail(e.logPath, capped))
     },
     killAll: () => {
       for (const id of tasks.keys()) kill(id)
@@ -531,13 +534,14 @@ export const tasks: FeatureModule = {
             "Use to inspect ongoing daemon output or debug stalled tasks.",
           args: {
             id: z.string(),
-            tail: z.number().optional().describe("lines, default 50"),
+            tail: z.number().optional().describe("lines, default 50, max 200"),
           },
           async execute(args) {
             const t = manager.get(args.id)
             if (t && t.status !== "running") {
               manager.acknowledge(t.id)
             }
+            // manager.output already redacts + caps tail lines
             return manager.output(args.id, args.tail ?? 50)
           },
         }),

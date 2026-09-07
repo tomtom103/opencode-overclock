@@ -12,7 +12,7 @@ When a task completes, its exit code and log tail are automatically injected int
 | :---------------- | :-------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
 | **`task_run`**    | `command` (string, req)<br>`description` (string, req)<br>`cwd` (string, opt)<br>`timeout` (seconds, opt) | Spawns a background process. Returns task ID and log path immediately. Exit code and log tail inject into the session on completion. |
 | **`task_status`** | `id` (string, opt)                                                                                        | Checks status (`running`, `exited`, `killed`) and exit code for a specific task or all tasks.                                        |
-| **`task_output`** | `id` (string, req)<br>`tail` (number, opt, default 50)                                                    | Reads the trailing log lines of a running or completed task.                                                                         |
+| **`task_output`** | `id` (string, req)<br>`tail` (number, opt, default 50, max 200)                                           | Reads the trailing log lines of a running or completed task. Secrets redacted.                                                       |
 | **`task_kill`**   | `id` (string, req)                                                                                        | Terminates a running task (`SIGTERM`, escalating to `SIGKILL` after 3 seconds).                                                      |
 
 ---

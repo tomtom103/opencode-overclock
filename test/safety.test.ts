@@ -185,4 +185,35 @@ describe("safety feature module", () => {
     )
     expect(hooks["tool.execute.before"]).toBeUndefined()
   })
+
+  test("blocks destructive git via task_run (background runner bypass)", async () => {
+    const ctx = {
+      client: { tui: { showToast: async () => {} } },
+      directory: "/tmp",
+    } as any
+
+    const hooks = await safety.init(ctx, {}, { busy: {} as any, toolName: (n) => n })
+    const output = { args: { command: "git reset --hard HEAD" } }
+    await hooks["tool.execute.before"]!({ tool: "task_run", args: output.args } as any, output as any)
+
+    expect(output.args.command).toContain("[overclock safety] Blocked destructive git command")
+    expect(output.args.command).toContain("exit 1")
+  })
+
+  test("respects renamed task_run tool id", async () => {
+    const ctx = {
+      client: { tui: { showToast: async () => {} } },
+      directory: "/tmp",
+    } as any
+
+    const hooks = await safety.init(
+      ctx,
+      {},
+      { busy: {} as any, toolName: (n: string) => (n === "task_run" ? "bg_run" : n) },
+    )
+    const output = { args: { command: "git push --force" } }
+    await hooks["tool.execute.before"]!({ tool: "bg_run", args: output.args } as any, output as any)
+
+    expect(output.args.command).toContain("[overclock safety] Blocked destructive git command")
+  })
 })

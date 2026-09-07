@@ -113,7 +113,10 @@ Every hook receives contextual environment variables:
 
 Autonomous models frequently attempt to make failing tests "pass" by taking unrequested shortcuts: skipping tests, silencing linter errors, or deleting assertions.
 
-`floorGuard` intercepts `edit` and `write` tool calls and issues immediate blocking warnings if anti-patterns are detected:
+`floorGuard` intercepts `edit`, `write`, and `apply_patch` tool calls (including renamed
+tool ids via `toolNames`) and appends an advisory warning to the tool output plus a toast
+when anti-patterns are detected. It does not rewrite or block the call — treat the warning
+as a policy signal, not an enforcement gate:
 
 ### Blocked Anti-Patterns
 

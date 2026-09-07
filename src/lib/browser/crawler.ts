@@ -2,6 +2,41 @@ import zlib from "node:zlib"
 import { distillHtml, distillPage, type DistilledResult } from "./distill.ts"
 import type { BrowserSessionManager } from "./session.ts"
 
+export function isPrivateHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "")
+  // URL normalizes decimal/octal/hex IPv4 (2130706433, 0x7f.0.0.1) to dotted form,
+  // so checking the normalized hostname covers those encodings.
+  if (host === "localhost") return true
+  if (host === "0.0.0.0") return true
+  // IPv6 loopback / unspecified / mapped / link-local / unique-local
+  if (host === "::1" || host === "::" || host === "::ffff:127.0.0.1") return true
+  const lower = host.toLowerCase()
+  if (
+    lower.startsWith("::ffff:") ||
+    lower.startsWith("fe80:") ||
+    lower.startsWith("fc") ||
+    lower.startsWith("fd")
+  )
+    return true
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (v4) {
+    const a = Number(v4[1])
+    const b = Number(v4[2])
+    if (a === 10) return true
+    if (a === 127) return true
+    if (a === 0) return true
+    if (a === 169 && b === 254) return true // link-local incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    // Carrier-grade NAT 100.64.0.0/10 + TEST-NET reservations
+    if (a === 100 && b >= 64 && b <= 127) return true
+    if (a === 192 && (b === 0 || b === 18 || b === 19)) return true
+    if (a === 198 && (b === 18 || b === 19 || (b >= 51 && b <= 55))) return true
+    if (a === 203 && b === 0) return true
+  }
+  return false
+}
+
 export function isCloudMetadataHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "")
   return (
@@ -12,8 +47,14 @@ export function isCloudMetadataHost(hostname: string): boolean {
   )
 }
 
+export interface BrowserUrlPolicy {
+  /** Allow loopback / RFC1918 / link-local targets (default false). Enable for local dev servers. */
+  allowPrivateNetwork?: boolean
+}
+
 export function validateBrowserUrl(
   rawUrl: string,
+  policy: BrowserUrlPolicy = {},
 ): { ok: true; url: URL } | { ok: false; error: string } {
   let parsedUrl: URL
   try {
@@ -33,7 +74,54 @@ export function validateBrowserUrl(
     return { ok: false, error: "Access to internal cloud metadata addresses is forbidden" }
   }
 
+  if (!policy.allowPrivateNetwork && isPrivateHostname(parsedUrl.hostname)) {
+    return { ok: false, error: "Access to private network addresses is forbidden" }
+  }
+
   return { ok: true, url: parsedUrl }
+}
+
+/**
+ * Guard against open-redirect SSRF: callers validate the initial URL, but fetch()
+ * follows 3xx by default. Re-check every hop (final URL + Location headers) and
+ * fail closed if a redirect escapes to metadata/private space.
+ */
+export async function safeFetch(
+  input: string | URL,
+  init: RequestInit = {},
+  policy: BrowserUrlPolicy = {},
+): Promise<Response> {
+  let current = typeof input === "string" ? input : input.href
+  const maxRedirects = 5
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const validation = validateBrowserUrl(current, policy)
+    if (!validation.ok) {
+      throw new Error(validation.error)
+    }
+    const res = await fetch(current, { ...init, redirect: "manual" })
+    if (res.status < 300 || res.status >= 400 || hop === maxRedirects) {
+      if (hop === maxRedirects && res.status >= 300 && res.status < 400) {
+        await res.arrayBuffer().catch(() => undefined)
+        throw new Error("Too many redirects")
+      }
+      const finalUrl = res.url || current
+      if (finalUrl && finalUrl !== current) {
+        const finalCheck = validateBrowserUrl(finalUrl, policy)
+        if (!finalCheck.ok) {
+          await res.arrayBuffer().catch(() => undefined)
+          throw new Error(finalCheck.error)
+        }
+      }
+      return res
+    }
+    const location = res.headers.get("location")
+    await res.arrayBuffer().catch(() => undefined)
+    if (!location) {
+      throw new Error(`Redirect (${res.status}) without Location header`)
+    }
+    current = new URL(location, current).href
+  }
+  throw new Error("Too many redirects")
 }
 
 export function isSpaShell(html: string): boolean {
@@ -123,17 +211,26 @@ export interface RobotsInfo {
   disallowed: string[]
 }
 
-export async function fetchRobotsTxt(origin: string): Promise<RobotsInfo> {
+export async function fetchRobotsTxt(
+  origin: string,
+  policy: BrowserUrlPolicy = {},
+): Promise<RobotsInfo> {
   const result: RobotsInfo = { sitemaps: [], disallowed: [] }
   try {
     const robotsUrl = new URL("/robots.txt", origin).href
-    const res = await fetch(robotsUrl, {
-      signal: AbortSignal.timeout(6000),
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; OpenCodeCrawler/1.0)",
-        Accept: "text/plain,*/*",
+    const validation = validateBrowserUrl(robotsUrl, policy)
+    if (!validation.ok) return result
+    const res = await safeFetch(
+      robotsUrl,
+      {
+        signal: AbortSignal.timeout(6000),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; OpenCodeCrawler/1.0)",
+          Accept: "text/plain,*/*",
+        },
       },
-    })
+      policy,
+    )
     if (!res.ok) return result
     const text = await res.text()
     const lines = text.split(/\r?\n/)
@@ -178,16 +275,25 @@ export async function fetchRobotsTxt(origin: string): Promise<RobotsInfo> {
   return result
 }
 
-export async function parseSitemapXml(sitemapUrl: string): Promise<string[]> {
+export async function parseSitemapXml(
+  sitemapUrl: string,
+  policy: BrowserUrlPolicy = {},
+): Promise<string[]> {
   const discoveredUrls: string[] = []
   try {
-    const res = await fetch(sitemapUrl, {
-      signal: AbortSignal.timeout(6000),
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; OpenCodeCrawler/1.0)",
-        Accept: "application/xml,text/xml,application/x-gzip,*/*",
+    const validation = validateBrowserUrl(sitemapUrl, policy)
+    if (!validation.ok) return discoveredUrls
+    const res = await safeFetch(
+      sitemapUrl,
+      {
+        signal: AbortSignal.timeout(6000),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; OpenCodeCrawler/1.0)",
+          Accept: "application/xml,text/xml,application/x-gzip,*/*",
+        },
       },
-    })
+      policy,
+    )
     if (!res.ok) return discoveredUrls
 
     const arrayBuffer = await res.arrayBuffer()
@@ -226,7 +332,7 @@ export async function parseSitemapXml(sitemapUrl: string): Promise<string[]> {
 
       const maxSub = Math.min(subSitemaps.length, 10)
       for (let i = 0; i < maxSub; i++) {
-        const childUrls = await parseSitemapXml(subSitemaps[i])
+        const childUrls = await parseSitemapXml(subSitemaps[i], policy)
         discoveredUrls.push(...childUrls)
       }
       return discoveredUrls
@@ -261,19 +367,25 @@ export interface CrawlPageResult {
 async function fetchAndDistillPage(
   targetUrl: string,
   manager?: BrowserSessionManager,
+  policy: BrowserUrlPolicy = {},
 ): Promise<{ page: CrawlPageResult; extractedLinks: string[] } | null> {
   let html = ""
   let distilled: DistilledResult | null = null
 
   try {
-    const response = await fetch(targetUrl, {
-      signal: AbortSignal.timeout(6000),
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    if (!validateBrowserUrl(targetUrl, policy).ok) return null
+    const response = await safeFetch(
+      targetUrl,
+      {
+        signal: AbortSignal.timeout(6000),
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
       },
-    })
+      policy,
+    )
 
     if (!response.ok) {
       return null
@@ -367,6 +479,7 @@ export interface CrawlOptions {
   excludePaths?: string[]
   format?: "map" | "digest"
   sitemapOnly?: boolean
+  allowPrivateNetwork?: boolean
 }
 
 export interface CrawlDependencies {
@@ -374,7 +487,8 @@ export interface CrawlDependencies {
 }
 
 export async function crawlSite(options: CrawlOptions, deps?: CrawlDependencies): Promise<string> {
-  const validation = validateBrowserUrl(options.url)
+  const policy: BrowserUrlPolicy = { allowPrivateNetwork: options.allowPrivateNetwork === true }
+  const validation = validateBrowserUrl(options.url, policy)
   if (!validation.ok) {
     return `Error crawling ${options.url}: ${validation.error}`
   }
@@ -399,10 +513,10 @@ export async function crawlSite(options: CrawlOptions, deps?: CrawlDependencies)
   let robotsDisallowed: string[] = []
 
   if (isDirectSitemap) {
-    const sitemapUrls = await parseSitemapXml(startUrl)
+    const sitemapUrls = await parseSitemapXml(startUrl, policy)
     for (const rawUrl of sitemapUrls) {
       try {
-        const v = validateBrowserUrl(rawUrl)
+        const v = validateBrowserUrl(rawUrl, policy)
         if (!v.ok) continue
         if (v.url.origin !== rootOrigin) continue
         if (!isPathAllowed(v.url.pathname, includePaths, excludePaths)) continue
@@ -416,21 +530,21 @@ export async function crawlSite(options: CrawlOptions, deps?: CrawlDependencies)
       }
     }
   } else if (sitemapOnly) {
-    const robots = await fetchRobotsTxt(rootOrigin)
+    const robots = await fetchRobotsTxt(rootOrigin, policy)
     robotsDisallowed = robots.disallowed
     const sitemapCandidates = new Set<string>(robots.sitemaps)
     sitemapCandidates.add(new URL("/sitemap.xml", rootOrigin).href)
 
     const sitemapUrls: string[] = []
     for (const sUrl of sitemapCandidates) {
-      const urls = await parseSitemapXml(sUrl)
+      const urls = await parseSitemapXml(sUrl, policy)
       sitemapUrls.push(...urls)
     }
 
     const effectiveExclude = [...(excludePaths ?? []), ...robotsDisallowed]
     for (const rawUrl of sitemapUrls) {
       try {
-        const v = validateBrowserUrl(rawUrl)
+        const v = validateBrowserUrl(rawUrl, policy)
         if (!v.ok) continue
         if (v.url.origin !== rootOrigin) continue
         if (!isPathAllowed(v.url.pathname, includePaths, effectiveExclude)) continue
@@ -448,7 +562,7 @@ export async function crawlSite(options: CrawlOptions, deps?: CrawlDependencies)
     visited.add(startNorm)
     queue.push({ url: startNorm, depth: 0 })
 
-    const robots = await fetchRobotsTxt(rootOrigin)
+    const robots = await fetchRobotsTxt(rootOrigin, policy)
     robotsDisallowed = robots.disallowed
   }
 
@@ -461,7 +575,7 @@ export async function crawlSite(options: CrawlOptions, deps?: CrawlDependencies)
 
     const results = await Promise.all(
       batch.map(async (item) => {
-        const res = await fetchAndDistillPage(item.url, deps?.manager)
+        const res = await fetchAndDistillPage(item.url, deps?.manager, policy)
         return { item, res }
       }),
     )
@@ -480,7 +594,7 @@ export async function crawlSite(options: CrawlOptions, deps?: CrawlDependencies)
       if (!sitemapOnly && item.depth < maxDepth) {
         for (const link of res.extractedLinks) {
           try {
-            const v = validateBrowserUrl(link)
+            const v = validateBrowserUrl(link, policy)
             if (!v.ok) continue
             if (v.url.origin !== rootOrigin) continue
             if (!isPathAllowed(v.url.pathname, includePaths, effectiveExclude)) continue

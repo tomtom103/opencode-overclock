@@ -6,8 +6,11 @@ import {
   normalizeUrl,
   extractLinks,
   isPathAllowed,
+  isPrivateHostname,
   fetchRobotsTxt,
   parseSitemapXml,
+  safeFetch,
+  validateBrowserUrl,
   crawlSite,
 } from "../src/lib/browser/crawler.ts"
 
@@ -266,32 +269,37 @@ describe("Documentation Crawler", () => {
     })
 
     test("robots.txt parsing extracts sitemap and disallow directives", async () => {
-      const robots = await fetchRobotsTxt(serverUrl)
+      const robots = await fetchRobotsTxt(serverUrl, { allowPrivateNetwork: true })
       expect(robots.sitemaps).toContain(`${serverUrl}/sitemap.xml`)
       expect(robots.disallowed).toContain("/admin")
       expect(robots.disallowed).toContain("/excluded")
     })
 
     test("parseSitemapXml parses standard XML sitemap", async () => {
-      const urls = await parseSitemapXml(`${serverUrl}/sitemap.xml`)
+      const urls = await parseSitemapXml(`${serverUrl}/sitemap.xml`, { allowPrivateNetwork: true })
       expect(urls).toContain(`${serverUrl}/docs/page1`)
       expect(urls).toContain(`${serverUrl}/docs/page2`)
       expect(urls).toContain(`${serverUrl}/admin/secret`)
     })
 
     test("parseSitemapXml parses gzipped sitemap with gunzipSync", async () => {
-      const urls = await parseSitemapXml(`${serverUrl}/sitemap-sub.xml.gz`)
+      const urls = await parseSitemapXml(`${serverUrl}/sitemap-sub.xml.gz`, {
+        allowPrivateNetwork: true,
+      })
       expect(urls).toContain(`${serverUrl}/docs/gzipped`)
     })
 
     test("parseSitemapXml traverses sitemap index with child gzipped sitemap", async () => {
-      const urls = await parseSitemapXml(`${serverUrl}/sitemap-index.xml`)
+      const urls = await parseSitemapXml(`${serverUrl}/sitemap-index.xml`, {
+        allowPrivateNetwork: true,
+      })
       expect(urls).toContain(`${serverUrl}/docs/gzipped`)
     })
 
     test("sitemapOnly: true discovers and crawls only URLs from sitemap", async () => {
       const result = await crawlSite({
         url: serverUrl,
+        allowPrivateNetwork: true,
         sitemapOnly: true,
         format: "map",
       })
@@ -307,6 +315,7 @@ describe("Documentation Crawler", () => {
     test("direct sitemap URL crawls all included sitemap pages", async () => {
       const result = await crawlSite({
         url: `${serverUrl}/sitemap.xml`,
+        allowPrivateNetwork: true,
         format: "digest",
       })
       expect(result).toContain("Page 1 Title")
@@ -321,6 +330,7 @@ describe("Documentation Crawler", () => {
       // /docs/deep (depth 2 from guide) should NOT be crawled.
       const depth1Result = await crawlSite({
         url: `${serverUrl}/docs/intro`,
+        allowPrivateNetwork: true,
         maxDepth: 1,
         format: "map",
       })
@@ -332,6 +342,7 @@ describe("Documentation Crawler", () => {
       // With maxDepth: 2, /docs/deep SHOULD be crawled.
       const depth2Result = await crawlSite({
         url: `${serverUrl}/docs/intro`,
+        allowPrivateNetwork: true,
         maxDepth: 2,
         format: "map",
       })
@@ -341,6 +352,7 @@ describe("Documentation Crawler", () => {
     test("BFS traversal respects maxPages limit and capped at 30", async () => {
       const result = await crawlSite({
         url: `${serverUrl}/docs/intro`,
+        allowPrivateNetwork: true,
         maxPages: 2,
         maxDepth: 3,
         format: "map",
@@ -352,6 +364,7 @@ describe("Documentation Crawler", () => {
       // Starting from root "/", includePaths: ["/docs/"] restricts crawl to docs
       const includeResult = await crawlSite({
         url: serverUrl,
+        allowPrivateNetwork: true,
         includePaths: ["/docs/"],
         format: "map",
       })
@@ -362,6 +375,7 @@ describe("Documentation Crawler", () => {
       // excludePaths excludes specific subpaths
       const excludeResult = await crawlSite({
         url: `${serverUrl}/docs/intro`,
+        allowPrivateNetwork: true,
         excludePaths: ["/docs/api"],
         format: "map",
       })
@@ -372,6 +386,7 @@ describe("Documentation Crawler", () => {
     test("format: 'map' outputs site tree with titles and headings", async () => {
       const result = await crawlSite({
         url: `${serverUrl}/docs/intro`,
+        allowPrivateNetwork: true,
         maxPages: 3,
         maxDepth: 1,
         format: "map",
@@ -389,6 +404,7 @@ describe("Documentation Crawler", () => {
     test("format: 'digest' outputs concatenated markdown sections with dividers", async () => {
       const result = await crawlSite({
         url: `${serverUrl}/docs/intro`,
+        allowPrivateNetwork: true,
         maxPages: 2,
         maxDepth: 1,
         format: "digest",
@@ -403,7 +419,11 @@ describe("Documentation Crawler", () => {
     })
 
     test("tool registration in browser feature executes correctly", async () => {
-      const featureInit = await browser.init({} as any, {}, { busy: {} as any, toolName: (n) => n })
+      const featureInit = await browser.init(
+        {} as any,
+        { allowPrivateNetwork: true },
+        { busy: {} as any, toolName: (n) => n },
+      )
       expect(featureInit.tool?.crawl).toBeDefined()
 
       const crawlTool = featureInit.tool!.crawl
@@ -455,6 +475,57 @@ describe("Documentation Crawler", () => {
       expect(cloudResult).toContain(
         "Error crawling http://169.254.169.254/latest: Access to internal cloud metadata addresses is forbidden",
       )
+    })
+
+    test("validateBrowserUrl blocks private network by default, allows with opt-in", () => {
+      for (const url of [
+        "http://127.0.0.1/",
+        "http://0.0.0.0/",
+        "http://localhost/",
+        "http://10.0.0.5/",
+        "http://192.168.1.1/",
+        "http://172.20.0.1/",
+        "http://169.254.10.20/",
+        "http://2130706433/", // decimal-encoded 127.0.0.1
+        "http://0x7f.0.0.1/", // hex-encoded 127.0.0.1
+      ]) {
+        const blocked = validateBrowserUrl(url)
+        expect(blocked.ok).toBe(false)
+      }
+      expect(validateBrowserUrl("https://example.com/docs").ok).toBe(true)
+      // Local test servers stay reachable when explicitly opted in...
+      expect(validateBrowserUrl(serverUrl, { allowPrivateNetwork: true }).ok).toBe(true)
+      // ...but cloud metadata stays blocked even with the opt-in
+      expect(validateBrowserUrl("http://169.254.169.254/latest", { allowPrivateNetwork: true }).ok).toBe(
+        false,
+      )
+      expect(isPrivateHostname("127.0.0.1")).toBe(true)
+      expect(isPrivateHostname("example.com")).toBe(false)
+    })
+
+    test("safeFetch fails closed on redirect to private target", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url)
+          if (url.pathname === "/go-private") {
+            return new Response(null, { status: 302, headers: { Location: "http://127.0.0.1/" } })
+          }
+          if (url.pathname === "/go-public") {
+            return new Response(null, { status: 302, headers: { Location: `${serverUrl}/docs/intro` } })
+          }
+          return new Response("Not Found", { status: 404 })
+        },
+      })
+      // serverUrl is assigned in the shared beforeAll; fall back to this server's own URL
+      const localOrigin = `http://127.0.0.1:${server.port}`
+      try {
+        await expect(
+          safeFetch(`${localOrigin}/go-private`, { signal: AbortSignal.timeout(5000) }),
+        ).rejects.toThrow(/private network/)
+      } finally {
+        server.stop(true)
+      }
     })
   })
 })

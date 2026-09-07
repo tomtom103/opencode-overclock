@@ -129,6 +129,12 @@ export interface BrowserOptions {
   navigationTimeoutMs?: number
   overrideWebfetch?: boolean
   artifactsDir?: string
+  /**
+   * Allow webfetch/crawl/browser to reach loopback, RFC1918, link-local, and
+   * other private targets (e.g. local dev servers on 127.0.0.1). Default false.
+   * Cloud metadata hosts stay blocked regardless of this flag.
+   */
+  allowPrivateNetwork?: boolean
   [key: string]: unknown
 }
 

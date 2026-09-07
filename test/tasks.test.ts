@@ -62,6 +62,22 @@ describe("createTaskManager", () => {
     expect(out).not.toContain("a\n")
   })
 
+  test("output redacts secrets from logs", async () => {
+    const { rec, mgr } = await runToExit("echo 'token sk-12345678901234567890abcdef leaked'; echo done")
+    const out = await mgr.output(rec.id, 50)
+    expect(out).toContain("done")
+    expect(out).not.toContain("sk-12345678901234567890abcdef")
+    expect(out).toContain("[REDACTED_API_KEY]")
+  })
+
+  test("output caps tail lines at 200", async () => {
+    const { rec, mgr } = await runToExit("seq 1 300")
+    const out = await mgr.output(rec.id, 10000)
+    const lines = out.trim().split("\n")
+    expect(lines.length).toBeLessThanOrEqual(200)
+    expect(out).toContain("300")
+  })
+
   test("nonzero exit code captured", async () => {
     const { rec } = await runToExit("exit 3")
     expect(rec.exitCode).toBe(3)

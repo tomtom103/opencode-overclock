@@ -18,6 +18,10 @@ const ctx = (client: unknown = capableClient) =>
 
 const dummyToolContext = { sessionID: "test-session" } as any
 
+// Local Bun.serve fixtures are private-network targets: opt in explicitly.
+const localOpts = { allowPrivateNetwork: true }
+const localShared = () => ({ busy: {} as any, toolName: (n: string) => n })
+
 async function callWebfetch(
   toolDef: any,
   args: { url: string; mode?: "distill" | "outline" | "section"; section?: string; timeout?: number },
@@ -149,7 +153,7 @@ describe("browser webfetch tool", () => {
   })
 
   test("mode: 'distill' (default) captures client-side rendered content", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(ctx(), localOpts, localShared())
     expect(res.tool).toBeDefined()
     expect(res.tool?.webfetch).toBeDefined()
 
@@ -176,7 +180,7 @@ describe("browser webfetch tool", () => {
   }, 20000)
 
   test("mode: 'outline' returns the Table of Contents outline", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(ctx(), localOpts, localShared())
     expect(res.tool?.webfetch).toBeDefined()
 
     try {
@@ -200,7 +204,7 @@ describe("browser webfetch tool", () => {
   }, 20000)
 
   test("mode: 'section' extracts only the requested section", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(ctx(), localOpts, localShared())
     expect(res.tool?.webfetch).toBeDefined()
 
     try {
@@ -226,7 +230,7 @@ describe("browser webfetch tool", () => {
   }, 40000)
 
   test("large content (>6,000 characters) prepends outline header with tip in mode 'distill'", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(ctx(), localOpts, localShared())
     expect(res.tool?.webfetch).toBeDefined()
 
     try {
@@ -272,7 +276,7 @@ describe("browser webfetch tool", () => {
   })
 
   test("navigation failure/timeout gracefully returns error string without crashing", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(ctx(), localOpts, localShared())
     expect(res.tool?.webfetch).toBeDefined()
 
     try {
@@ -315,7 +319,7 @@ describe("browser webfetch tool", () => {
   }, 40000)
 
   test("blocks access to cloud metadata IP addresses", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n: string) => n })
     try {
       const imdsResult = await callWebfetch(res.tool!.webfetch, {
         url: "http://169.254.169.254/latest/meta-data/",
@@ -336,6 +340,39 @@ describe("browser webfetch tool", () => {
       expect(gcpResult.toLowerCase()).toContain("cloud metadata")
     } finally {
       await res.dispose?.()
+    }
+  }, 20000)
+
+  test("blocks private network targets by default; allowPrivateNetwork opts in", async () => {
+    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n: string) => n })
+    try {
+      for (const url of [
+        "http://127.0.0.1/",
+        "http://10.1.2.3/",
+        "http://192.168.1.1/",
+        "http://2130706433/", // decimal-encoded 127.0.0.1
+      ]) {
+        const out = await callWebfetch(res.tool!.webfetch, { url, mode: "distill" })
+        expect(out.toLowerCase()).toContain("private network")
+      }
+    } finally {
+      await res.dispose?.()
+    }
+
+    // Opt-in: local dev server on 127.0.0.1 remains reachable
+    const allowed = await browser.init(
+      ctx(),
+      { allowPrivateNetwork: true },
+      { busy: {} as any, toolName: (n) => n },
+    )
+    try {
+      const out = await callWebfetch(allowed.tool!.webfetch, {
+        url: `${serverUrl}/docs`,
+        mode: "outline",
+      })
+      expect(out).toContain("# Table of Contents")
+    } finally {
+      await allowed.dispose?.()
     }
   }, 20000)
 
@@ -364,7 +401,7 @@ describe("browser webfetch tool", () => {
   })
 
   test("dual-tier fetch: fast static path yields fast markdown without headless browser overhead", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(ctx(), localOpts, localShared())
     try {
       const start = Date.now()
       const output = await callWebfetch(res.tool!.webfetch, {

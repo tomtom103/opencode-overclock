@@ -2,7 +2,7 @@
 
 Autonomous models frequently attempt to resolve Git conflicts, uncommitted changes, or dirty working trees using blunt, destructive commands. A single `git reset --hard` or `git clean -f` can permanently delete hours of uncommitted work.
 
-The `safety` module intercepts `bash` tool calls before execution and blocks destructive Git operations, preventing irreversible data loss.
+The `safety` module intercepts `bash` and `task_run` tool calls before execution and blocks destructive Git operations, preventing irreversible data loss.
 
 ---
 

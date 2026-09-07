@@ -247,7 +247,18 @@ export interface ExecBashOptions {
    * Specific variable names to keep even if they match sensitive patterns.
    */
   envAllowlist?: string[]
+  /**
+   * Maximum captured bytes per stream (stdout/stderr). Defaults to 1MB.
+   * Outputs beyond the cap are truncated with a marker so giant tool
+   * outputs cannot OOM the host or flood the model context.
+   */
+  maxBytes?: number
 }
+
+/** Default per-stream capture cap for execBash (1MB). */
+export const EXEC_BASH_MAX_BYTES = 1024 * 1024
+
+const TRUNCATION_MARKER = "\n... [truncated: output exceeded capture limit]"
 
 export interface ExecBashResult {
   code: number | null
@@ -292,6 +303,7 @@ export async function execBash(command: string, options: ExecBashOptions = {}): 
 
   // Protect against pipe leaks when background child processes keep stdout/stderr open
   const streamTimeoutMs = options.timeoutMs ? options.timeoutMs + 2500 : undefined
+  const maxBytes = options.maxBytes ?? EXEC_BASH_MAX_BYTES
   const readStreamWithTimeout = (stream: ReadableStream, timeoutMs?: number): Promise<string> => {
     const readPromise = new Response(stream).text().catch(() => "")
     if (!timeoutMs) return readPromise
@@ -304,7 +316,7 @@ export async function execBash(command: string, options: ExecBashOptions = {}): 
     ]).finally(() => clearTimeout(timer))
   }
 
-  const [stdout, stderr, code] = await Promise.all([
+  const [rawStdout, rawStderr, code] = await Promise.all([
     readStreamWithTimeout(proc.stdout, streamTimeoutMs),
     readStreamWithTimeout(proc.stderr, streamTimeoutMs),
     proc.exited.catch(() => proc.exitCode ?? 1),
@@ -313,5 +325,9 @@ export async function execBash(command: string, options: ExecBashOptions = {}): 
   if (killTimer) clearTimeout(killTimer)
   if (killEscalationTimer) clearTimeout(killEscalationTimer)
 
+  const truncate = (text: string): string =>
+    text.length > maxBytes ? text.slice(0, maxBytes) + TRUNCATION_MARKER : text
+  const stdout = truncate(rawStdout)
+  const stderr = truncate(rawStderr)
   return { code, stdout, stderr, combined: stdout + stderr }
 }

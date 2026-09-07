@@ -192,7 +192,11 @@ describe("browser interactive tool", () => {
       },
     })
     serverUrl = `http://127.0.0.1:${server.port}`
-    sharedBrowserRes = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    sharedBrowserRes = await browser.init(
+      ctx(),
+      { allowPrivateNetwork: true },
+      { busy: {} as any, toolName: (n) => n },
+    )
     browserTool = sharedBrowserRes.tool!.browser
   })
 
@@ -210,7 +214,11 @@ describe("browser interactive tool", () => {
   })
 
   test("registers browser tool on init", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(
+      ctx(),
+      { allowPrivateNetwork: true },
+      { busy: {} as any, toolName: (n) => n },
+    )
     try {
       expect(res.tool).toBeDefined()
       expect(res.tool?.browser).toBeDefined()
@@ -223,7 +231,7 @@ describe("browser interactive tool", () => {
     const testDir = dir()
     const res = await browser.init(
       ctx(capableClient, testDir),
-      {},
+      { allowPrivateNetwork: true },
       { busy: {} as any, toolName: (n) => n },
     )
     expect(res.tool?.browser).toBeDefined()
@@ -599,7 +607,11 @@ describe("browser interactive tool", () => {
   }, 30000)
 
   test("supports tabs and switchTab actions across multiple pages", async () => {
-    const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })
+    const res = await browser.init(
+      ctx(),
+      { allowPrivateNetwork: true },
+      { busy: {} as any, toolName: (n) => n },
+    )
     const tabsTool = res.tool!.browser
 
     try {
