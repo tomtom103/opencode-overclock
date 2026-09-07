@@ -16,6 +16,8 @@ import { DOUBT_REVIEWER_PROMPT } from "../workflow/agents/doubt-reviewer.ts"
 import { CODEBASE_RESEARCHER_PROMPT } from "../workflow/agents/codebase-researcher.ts"
 import { DESIGN_EXPLORER_PROMPT } from "../workflow/agents/design-explorer.ts"
 import { ENGINEERING_COACH_PROMPT } from "../workflow/agents/engineering-coach.ts"
+import { CRAFTSMAN_PROMPT } from "../workflow/agents/craftsman.ts"
+import { DOC_WRITER_PROMPT } from "../workflow/agents/doc-writer.ts"
 
 function getBundledSkillsDir(customPath?: string): string {
   if (customPath) return customPath
@@ -109,7 +111,7 @@ export const WORKFLOW_AGENTS = {
     },
   },
   "doubt-reviewer": {
-    mode: "subagent" as const,
+    mode: "all" as const,
     description: "Adversarial Verification Engineer evaluating artifacts without author bias",
     prompt: DOUBT_REVIEWER_PROMPT,
     tools: {
@@ -121,7 +123,7 @@ export const WORKFLOW_AGENTS = {
     },
   },
   "codebase-researcher": {
-    mode: "subagent" as const,
+    mode: "all" as const,
     description: "Scout Agent tracing seams, dependencies, and call graphs without polluting context",
     prompt: CODEBASE_RESEARCHER_PROMPT,
     tools: {
@@ -133,7 +135,7 @@ export const WORKFLOW_AGENTS = {
     },
   },
   "design-explorer": {
-    mode: "subagent" as const,
+    mode: "all" as const,
     description: "Principal Architect producing contrasting 'Design It Twice' interface proposals",
     prompt: DESIGN_EXPLORER_PROMPT,
     tools: {
@@ -145,7 +147,7 @@ export const WORKFLOW_AGENTS = {
     },
   },
   "engineering-coach": {
-    mode: "subagent" as const,
+    mode: "all" as const,
     description: "Elite Staff Mentor providing Socratic debugging guidance and design critique",
     prompt: ENGINEERING_COACH_PROMPT,
     tools: {
@@ -155,6 +157,18 @@ export const WORKFLOW_AGENTS = {
     permission: {
       edit: "deny" as const,
     },
+  },
+  craftsman: {
+    mode: "all" as const,
+    description:
+      "Disciplined software craftsman enforcing TDD, minimal vertical slices, and clean architecture",
+    prompt: CRAFTSMAN_PROMPT,
+  },
+  "doc-writer": {
+    mode: "all" as const,
+    description:
+      "Technical writer synthesizing accurate documentation, API references, and architecture records from code",
+    prompt: DOC_WRITER_PROMPT,
   },
 }
 
@@ -222,7 +236,7 @@ export const workflow: FeatureModule = {
             current.mode = current.mode ?? ag.mode
             current.description = current.description ?? ag.description
             current.system = current.system ?? ag.prompt
-            if (ag.permission?.edit === "deny") {
+            if ("permission" in ag && ag.permission?.edit === "deny") {
               const perms = (current.permissions as any[]) ?? []
               const hasDenyEdit = perms.some((p: any) => p.action === "edit" && p.effect === "deny")
               if (!hasDenyEdit) {

@@ -31,29 +31,48 @@ describe("workflow feature module", () => {
     expect(cfg.command.ship.template).toContain("Diff Evidence Resolution")
   })
 
-  test("injects specialized subagents into config with read-only sandboxing", async () => {
+  test("injects specialized agents into config with appropriate modes and sandboxing", async () => {
     const hooks = await workflow.init(fakeCtx, {}, shared)
     const cfg: Record<string, any> = {}
     hooks.config!(cfg)
 
     expect(cfg.agent).toBeDefined()
-    const expectedAgents = [
+    const subagents = [
       "standards-reviewer",
       "spec-reviewer",
       "security-auditor",
       "test-engineer",
       "performance-auditor",
+    ]
+
+    for (const id of subagents) {
+      expect(cfg.agent[id]).toBeDefined()
+      expect(cfg.agent[id].mode).toBe("subagent")
+      expect(cfg.agent[id].tools).toEqual({ write: false, edit: false })
+      expect(cfg.agent[id].permission).toEqual({ edit: "deny" })
+    }
+
+    const conversationalAgents = [
       "doubt-reviewer",
       "codebase-researcher",
       "design-explorer",
       "engineering-coach",
     ]
 
-    for (const id of expectedAgents) {
+    for (const id of conversationalAgents) {
       expect(cfg.agent[id]).toBeDefined()
-      expect(cfg.agent[id].mode).toBe("subagent")
+      expect(cfg.agent[id].mode).toBe("all")
       expect(cfg.agent[id].tools).toEqual({ write: false, edit: false })
       expect(cfg.agent[id].permission).toEqual({ edit: "deny" })
+    }
+
+    const implementationAgents = ["craftsman", "doc-writer"]
+
+    for (const id of implementationAgents) {
+      expect(cfg.agent[id]).toBeDefined()
+      expect(cfg.agent[id].mode).toBe("all")
+      expect(cfg.agent[id].tools).toBeUndefined()
+      expect(cfg.agent[id].permission).toBeUndefined()
     }
 
     expect(cfg.agent["security-auditor"].prompt).toContain("OWASP Top 10")
@@ -62,6 +81,8 @@ describe("workflow feature module", () => {
     expect(cfg.agent["design-explorer"].prompt).toContain("Design It Twice")
     expect(cfg.agent["codebase-researcher"].prompt).toContain("Research")
     expect(cfg.agent["test-engineer"].prompt).toContain("QA")
+    expect(cfg.agent["craftsman"].prompt).toContain("Test-Driven Development")
+    expect(cfg.agent["doc-writer"].prompt).toContain("Technical Writer")
   })
 
   test("user commands override workflow defaults", async () => {
@@ -128,6 +149,12 @@ describe("workflow feature module", () => {
     expect(agents["standards-reviewer"].permissions).toEqual([
       { action: "edit", resource: "*", effect: "deny" },
     ])
+    expect(agents["engineering-coach"].mode).toBe("all")
+    expect(agents["engineering-coach"].permissions).toEqual([
+      { action: "edit", resource: "*", effect: "deny" },
+    ])
+    expect(agents["craftsman"].mode).toBe("all")
+    expect(agents["craftsman"].permissions).toBeUndefined()
   })
 
   test("V2 preserves user command and agent overrides", async () => {
