@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { FeatureModule, WorkflowOptions } from "../core/types.ts"
@@ -25,6 +25,48 @@ function getBundledSkillsDir(customPath?: string): string {
   const currentDir =
     typeof import.meta.dir === "string" ? import.meta.dir : dirname(fileURLToPath(import.meta.url))
   return resolve(currentDir, "../../skills")
+}
+
+/**
+ * When tool remapping is configured, prepares a local copy of bundled skills
+ * with all tool names dynamically rewritten via renameInText.
+ */
+export function prepareSkillsDir(
+  sourceDir: string,
+  targetDir: string,
+  rename: Record<string, string>,
+): string {
+  const activeEntries = Object.entries(rename).filter(([from, to]) => from !== to)
+  if (activeEntries.length === 0 || !existsSync(sourceDir)) {
+    return sourceDir
+  }
+
+  try {
+    mkdirSync(targetDir, { recursive: true })
+    const skillDirs = readdirSync(sourceDir, { withFileTypes: true })
+    for (const dir of skillDirs) {
+      if (!dir.isDirectory()) continue
+      const srcSub = resolve(sourceDir, dir.name)
+      const dstSub = resolve(targetDir, dir.name)
+      mkdirSync(dstSub, { recursive: true })
+
+      const files = readdirSync(srcSub, { withFileTypes: true })
+      for (const f of files) {
+        if (!f.isFile() || !f.name.endsWith(".md")) continue
+        const srcFile = resolve(srcSub, f.name)
+        const dstFile = resolve(dstSub, f.name)
+        const raw = readFileSync(srcFile, "utf-8")
+        const processed = renameInText(raw, rename)
+        if (!existsSync(dstFile) || readFileSync(dstFile, "utf-8") !== processed) {
+          writeFileSync(dstFile, processed, "utf-8")
+        }
+      }
+    }
+    return targetDir
+  } catch (e) {
+    console.warn(`[overclock] failed to prepare remapped skills: ${e}`)
+    return sourceDir
+  }
 }
 
 export const WORKFLOW_COMMANDS = {
@@ -184,7 +226,11 @@ export const workflow: FeatureModule = {
     }
 
     const rename = shared?.rename ?? {}
-    const skillsPath = getBundledSkillsDir(opts.skillsPath)
+    const bundledPath = getBundledSkillsDir(opts.skillsPath)
+    const skillsPath =
+      _ctx?.directory && Object.keys(rename).length > 0
+        ? prepareSkillsDir(bundledPath, resolve(_ctx.directory, ".opencode/overclock/skills"), rename)
+        : bundledPath
 
     return {
       config: async (cfg: any) => {
@@ -293,7 +339,12 @@ export const workflow: FeatureModule = {
       })
     }
 
-    const skillsPath = getBundledSkillsDir(opts.skillsPath)
+    const bundledPath = getBundledSkillsDir(opts.skillsPath)
+    const dir = (v2Context as any)?.directory || (v2Context as any)?.cwd || process.cwd()
+    const skillsPath =
+      dir && Object.keys(rename).length > 0
+        ? prepareSkillsDir(bundledPath, resolve(dir, ".opencode/overclock/skills"), rename)
+        : bundledPath
     if (existsSync(skillsPath) && v2Context.skill?.transform) {
       await v2Context.skill.transform(async (draft) => {
         const existing = draft.list?.() ?? []

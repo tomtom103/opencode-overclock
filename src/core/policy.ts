@@ -64,13 +64,17 @@ export function resolveToolPolicy(
     // Check collisions with host built-ins
     const twin = HOST_TOOL_IDS.find((id) => id.toLowerCase() === visible.toLowerCase())
     if (twin) {
-      issues.push({
-        path: `tool "${declared}"`,
-        message:
-          twin === visible
-            ? `"${visible}" is an opencode built-in -- registering it replaces that built-in`
-            : `"${visible}" differs from opencode's built-in "${twin}" only by case; anything matching case-insensitively sees one name twice`,
-      })
+      // Overclock intentionally overrides "webfetch" via its browser feature unless remapped
+      const isIntentionalOverride = declared === "webfetch" && visible === "webfetch"
+      if (!isIntentionalOverride) {
+        issues.push({
+          path: `tool "${declared}"`,
+          message:
+            twin === visible
+              ? `"${visible}" is an opencode built-in -- registering it replaces that built-in`
+              : `"${visible}" differs from opencode's built-in "${twin}" only by case; anything matching case-insensitively sees one name twice`,
+        })
+      }
     }
 
     // Check allowlist

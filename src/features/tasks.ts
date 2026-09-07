@@ -133,6 +133,8 @@ function startStallWatchdog(
           return
         }
         entry.stallNotified = true
+        if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
+        entry.timeoutTimer = undefined
         if (entry.stallTimer) clearInterval(entry.stallTimer)
         entry.stallTimer = undefined
         onStall(strip(entry), tail)

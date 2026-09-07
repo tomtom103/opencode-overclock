@@ -89,6 +89,21 @@ describe("createTaskManager", () => {
     expect(rec.status).toBe("killed")
   })
 
+  test("kill clears timeoutTimer to prevent redundant timer fire", async () => {
+    const mgr = createTaskManager({ logDir: logDir() })
+    const t = mgr.run({
+      command: "sleep 30",
+      description: "kill-timeout-test",
+      cwd: "/tmp",
+      sessionID: "s-kill",
+      timeoutMs: 5000,
+    })
+    expect(mgr.kill(t.id)).toBe(true)
+    expect(mgr.get(t.id)?.status).toBe("killed")
+    // Calling kill again on already killed task returns false
+    expect(mgr.kill(t.id)).toBe(false)
+  })
+
   test("timeout auto-kills", async () => {
     const { rec } = await runToExit("sleep 30", { timeoutMs: 100 })
     expect(rec.status).toBe("killed")

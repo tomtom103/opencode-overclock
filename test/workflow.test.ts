@@ -308,4 +308,32 @@ describe("workflow feature module", () => {
     expect(agents.craftsman.system).toContain("custom_browser")
     expect(agents.craftsman.system).not.toContain("task_run")
   })
+
+  test("remaps skill markdown content when toolNames are active", async () => {
+    const testDir = "/tmp/test-oc-workflow-" + Math.random().toString(36).slice(2)
+    const remappedShared = {
+      busy: {} as any,
+      toolName: (n: string) => (n === "task_run" ? "custom_run" : n),
+      rename: { task_run: "custom_run" },
+    }
+
+    const hooks = await workflow.init({ directory: testDir, client: {} } as any, {}, remappedShared)
+    const cfg: Record<string, any> = {}
+    await hooks.config!(cfg)
+
+    expect(cfg.skills).toBeDefined()
+    expect(Array.isArray(cfg.skills.paths)).toBe(true)
+    const skillsPath = cfg.skills.paths[0]
+    expect(skillsPath).toContain(testDir)
+
+    // Check ui-verify/SKILL.md in the remapped path
+    const uiVerifySkill = await Bun.file(`${skillsPath}/ui-verify/SKILL.md`).text()
+    expect(uiVerifySkill).toContain("`custom_run`")
+    expect(uiVerifySkill).not.toContain("`task_run`")
+
+    // Check diagnosing-bugs/SKILL.md in the remapped path
+    const diagnosingSkill = await Bun.file(`${skillsPath}/diagnosing-bugs/SKILL.md`).text()
+    expect(diagnosingSkill).toContain("`custom_run`")
+    expect(diagnosingSkill).not.toContain("`task_run`")
+  })
 })

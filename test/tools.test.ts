@@ -67,6 +67,17 @@ describe("resolveToolPolicy", () => {
     expect(issues[0].message).toMatch(/only by case/)
   })
 
+  test("does not warn for intentional webfetch override unless remapped", () => {
+    const browserFeatures = [mod("browser", ["webfetch", "browser", "crawl"])]
+    const { issues } = resolveToolPolicy({}, browserFeatures)
+    expect(issues.length).toBe(0)
+
+    // But if another tool is remapped onto webfetch, it should warn
+    const { issues: remapIssues } = resolveToolPolicy({ toolNames: { task_run: "webfetch" } }, FEATURES)
+    expect(remapIssues.length).toBe(1)
+    expect(remapIssues[0].message).toMatch(/built-in/)
+  })
+
   test("flags invalid toolAllowlist types", () => {
     const num = resolveToolPolicy({ toolAllowlist: 123 as any }, FEATURES)
     expect(num.issues.some((i) => i.path === "toolAllowlist")).toBe(true)
