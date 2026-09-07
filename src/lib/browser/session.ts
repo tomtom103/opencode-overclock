@@ -412,7 +412,7 @@ export class BrowserSessionManager {
     if (browser) {
       try {
         if (browser.isConnected()) {
-          await browser.close()
+          await Promise.race([browser.close(), new Promise((resolve) => setTimeout(resolve, 3000))])
         }
       } catch {
         // Discard errors during shutdown

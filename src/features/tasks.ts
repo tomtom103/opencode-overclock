@@ -366,6 +366,9 @@ export const tasks: FeatureModule = {
     const stallCheckIntervalMs =
       typeof options.stallCheckIntervalMs === "number" ? options.stallCheckIntervalMs : 5_000
 
+    const pendingTimers = new Set<ReturnType<typeof setInterval>>()
+    const isSessionBusy = (sessionID: string) => (shared.busy ? shared.busy.isBusy(sessionID) : false)
+
     const manager = createTaskManager({
       logDir,
       mirrorPath: taskStore.path(ctx.directory),
@@ -379,19 +382,54 @@ export const tasks: FeatureModule = {
       maxTasks: typeof options.maxTasks === "number" ? options.maxTasks : 100,
       onExit: async (task) => {
         if (task.status === "killed") return
-        const rawTail = await readLogTail(task.logPath, 20)
-        const tail = redactSensitiveOutput(rawTail)
-        const ok = task.exitCode === 0
-        await toast(
-          ctx.client,
-          `task ${task.id} done (exit ${task.exitCode})`,
-          ok ? "success" : "warning",
-        )
-        await inject(
-          ctx.client,
-          task.sessionID,
-          `[background task ${task.id} "${task.description}" exited ${task.exitCode}]\nlog tail:\n${tail}`,
-        )
+        if (manager.isAcknowledged(task.id)) return
+
+        const deliver = async () => {
+          if (manager.isAcknowledged(task.id)) return
+          manager.acknowledge(task.id)
+          const rawTail = await readLogTail(task.logPath, 20)
+          const tail = redactSensitiveOutput(rawTail)
+          const ok = task.exitCode === 0
+          await toast(
+            ctx.client,
+            `task ${task.id} done (exit ${task.exitCode})`,
+            ok ? "success" : "warning",
+          )
+          await inject(
+            ctx.client,
+            task.sessionID,
+            `[background task ${task.id} "${task.description}" exited ${task.exitCode}]\nlog tail:\n${tail}`,
+          )
+        }
+
+        if (!isSessionBusy(task.sessionID)) {
+          await deliver()
+          return
+        }
+
+        // Session is busy: agent is actively running tools/thinking.
+        // Defer injection until the turn completes so:
+        // 1. If agent inspects task_status/task_output during this turn, duplicate injection is suppressed.
+        // 2. We don't queue an unsolicited prompt that forces a redundant second turn.
+        const pollIntervalMs = 50
+        const maxDeferMs = 30_000
+        const started = Date.now()
+
+        const timer = setInterval(() => {
+          if (manager.isAcknowledged(task.id)) {
+            clearInterval(timer)
+            pendingTimers.delete(timer)
+            return
+          }
+
+          if (!isSessionBusy(task.sessionID) || Date.now() - started > maxDeferMs) {
+            clearInterval(timer)
+            pendingTimers.delete(timer)
+            void deliver()
+          }
+        }, pollIntervalMs)
+
+        pendingTimers.add(timer)
       },
       ...(stallDetection
         ? {
@@ -418,12 +456,16 @@ export const tasks: FeatureModule = {
         Object.assign(output.env, NON_INTERACTIVE_ENV)
       },
       dispose: async () => {
+        for (const timer of pendingTimers) clearInterval(timer)
+        pendingTimers.clear()
         if (killOnExit) manager.killAll()
       },
       tool: {
         task_run: tool({
           description:
-            "Run a shell command in the background. Returns a task id immediately; when the task exits, its result is posted back into this session. Use for long builds, servers, watchers.",
+            "Run a shell command asynchronously in the background. Returns a task id immediately. " +
+            "DO NOT poll task_status waiting for completion -- when the task exits, its exit code and log tail are automatically injected as a new message in this session. " +
+            "Either perform other independent work or yield your turn. Use for long builds, servers, watchers.",
           args: {
             command: z.string().describe("shell command"),
             description: z.string().describe("short human label"),
@@ -442,28 +484,51 @@ export const tasks: FeatureModule = {
               sessionID: tctx.sessionID,
               timeoutMs: args.timeout ? args.timeout * 1000 : undefined,
             })
-            return `started ${fmt(task)} (log: ${task.logPath})`
+            return (
+              `started ${fmt(task)} (log: ${task.logPath})\n` +
+              `[Task is executing in background. DO NOT poll task_status. Yield your turn now or perform independent tasks; exit results and output will automatically be delivered when finished.]`
+            )
           },
         }),
         task_status: tool({
-          description: "Status of one background task (id) or all (no id).",
+          description:
+            "Query status of background tasks or persistent daemons (servers, watchers). " +
+            "DO NOT use this to poll for completion of commands launched with task_run (completion and logs are automatically injected into the session when finished).",
           args: { id: z.string().optional() },
           async execute(args) {
             if (args.id) {
               const t = manager.get(args.id)
-              return t ? fmt(t) : `no task ${args.id}`
+              if (!t) return `no task ${args.id}`
+              if (t.status === "running") {
+                return (
+                  `${fmt(t)}\n` +
+                  `[Reminder: Task is still running. Do NOT poll task_status in a loop. ` +
+                  `Yield your turn now; exit status and log tail will be automatically injected into the session upon completion.]`
+                )
+              }
+              manager.acknowledge(t.id)
+              const rawTail = await readLogTail(t.logPath, 20)
+              const tail = redactSensitiveOutput(rawTail)
+              return `${fmt(t)}\nlog tail:\n${tail}`
             }
             const all = manager.list()
             return all.length ? all.map(fmt).join("\n") : "no tasks"
           },
         }),
         task_output: tool({
-          description: "Tail a background task's log.",
+          description:
+            "Tail a background task's log output. " +
+            "DO NOT poll this tool waiting for a command to finish -- log tails are automatically injected on exit. " +
+            "Use to inspect ongoing daemon output or debug stalled tasks.",
           args: {
             id: z.string(),
             tail: z.number().optional().describe("lines, default 50"),
           },
           async execute(args) {
+            const t = manager.get(args.id)
+            if (t && t.status !== "running") {
+              manager.acknowledge(t.id)
+            }
             return manager.output(args.id, args.tail ?? 50)
           },
         }),

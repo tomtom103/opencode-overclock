@@ -146,7 +146,12 @@ export const browser: FeatureModule = {
                   section: args.section,
                 })
 
-                const isSubstantial = distilled.content.trim().length > 300
+                const isSubstantial =
+                  mode === "section"
+                    ? distilled.content.trim().length > 0
+                    : mode === "outline"
+                      ? (distilled.outline?.length ?? 0) > 0
+                      : distilled.content.trim().length > 300
                 const isSpa = isSpaShell(htmlText)
 
                 if (isSubstantial && !isSpa) {
@@ -328,40 +333,65 @@ export const browser: FeatureModule = {
               try {
                 await targetLocator.click({ timeout: 4000 })
               } catch (err) {
-                // Attempt uncollapse parent container and retry with force: true
-                await targetLocator
-                  .evaluate((el) => {
-                    const parent = el.closest('details, .mw-collapsed, [aria-expanded="false"]')
-                    if (parent) {
-                      parent.classList.remove("mw-collapsed")
-                      parent.setAttribute("aria-expanded", "true")
-                      if (parent instanceof HTMLDetailsElement) parent.open = true
-                    }
-                  })
-                  .catch(() => {})
+                // If element does not exist in the DOM, fail fast without waiting through fallbacks
+                const inDom = await targetLocator.count().catch(() => 0)
+                if (inDom === 0) {
+                  throw err
+                }
 
+                let fallbackSuccess = false
                 try {
-                  await targetLocator.click({ force: true, timeout: 4000 })
+                  // Attempt uncollapse parent container and retry with force: true
+                  await targetLocator
+                    .evaluate(
+                      (el) => {
+                        const parent = el.closest('details, .mw-collapsed, [aria-expanded="false"]')
+                        if (parent) {
+                          parent.classList.remove("mw-collapsed")
+                          parent.setAttribute("aria-expanded", "true")
+                          if (parent instanceof HTMLDetailsElement) parent.open = true
+                        }
+                      },
+                      undefined,
+                      { timeout: 2000 },
+                    )
+                    .catch(() => {})
+
+                  await targetLocator.click({ force: true, timeout: 2000 })
+                  fallbackSuccess = true
                 } catch {
-                  const href = await targetLocator
-                    .evaluate((el) => (el as HTMLAnchorElement).href || el.closest("a")?.href)
-                    .catch(() => null)
+                  try {
+                    const href = await targetLocator
+                      .evaluate(
+                        (el) => (el as HTMLAnchorElement).href || el.closest("a")?.href,
+                        undefined,
+                        { timeout: 1000 },
+                      )
+                      .catch(() => null)
 
-                  const prevUrl = page.url()
-                  await targetLocator.dispatchEvent("click").catch(() => {})
+                    const prevUrl = page.url()
+                    await targetLocator.dispatchEvent("click", {}, { timeout: 1000 })
+                    fallbackSuccess = true
 
-                  if (href && page.url() === prevUrl) {
-                    try {
-                      await page.goto(href, { waitUntil: "domcontentloaded", timeout: 5000 })
-                    } catch (navErr) {
-                      void navErr
+                    if (href && page.url() === prevUrl) {
+                      try {
+                        await page.goto(href, { waitUntil: "domcontentloaded", timeout: 5000 })
+                      } catch (navErr) {
+                        void navErr
+                      }
                     }
+                  } catch {
+                    // Fallbacks exhausted
                   }
                 }
+
+                if (!fallbackSuccess) {
+                  throw err
+                }
               }
-              await page.waitForLoadState("domcontentloaded", { timeout: 2000 }).catch(() => {})
+              await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {})
               const newSnapshot = await captureSnapshot(page)
-              const title = await page.title()
+              const title = (await page.title().catch(() => "")) || ""
               output = `Clicked [${args.ref ? `#${args.ref}` : args.selector}] -> Current URL: ${page.url()} (Title: ${title})${note}\n\n${newSnapshot.formatted}`
               break
             }

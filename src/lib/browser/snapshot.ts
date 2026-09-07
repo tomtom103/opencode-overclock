@@ -351,13 +351,32 @@ export function evaluateSnapshot(
 
 export async function captureSnapshot(page: Page, options?: SnapshotOptions): Promise<SnapshotResult> {
   const maxElements = options?.maxElements ?? 60
-  const result = await page.evaluate(evaluateSnapshot, {
+  const evalOpts = {
     filter: options?.query || options?.filter,
     query: options?.query,
     maxElements,
     offset: options?.offset,
     scope: options?.scope,
-  })
+  }
+
+  let result: {
+    title: string
+    url: string
+    elements: SnapshotElement[]
+    totalMatching: number
+  }
+
+  try {
+    result = await page.evaluate(evaluateSnapshot, evalOpts)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes("Execution context was destroyed") || msg.includes("navigation")) {
+      await page.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => {})
+      result = await page.evaluate(evaluateSnapshot, evalOpts)
+    } else {
+      throw err
+    }
+  }
 
   const formatted = formatSnapshotMarkdown(result.title, result.url, result.elements, {
     totalMatching: result.totalMatching,

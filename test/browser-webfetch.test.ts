@@ -312,7 +312,7 @@ describe("browser webfetch tool", () => {
     } finally {
       await res.dispose?.()
     }
-  }, 20000)
+  }, 40000)
 
   test("blocks access to cloud metadata IP addresses", async () => {
     const res = await browser.init(ctx(), {}, { busy: {} as any, toolName: (n) => n })

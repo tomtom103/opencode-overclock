@@ -307,7 +307,7 @@ export async function execBash(command: string, options: ExecBashOptions = {}): 
   const [stdout, stderr, code] = await Promise.all([
     readStreamWithTimeout(proc.stdout, streamTimeoutMs),
     readStreamWithTimeout(proc.stderr, streamTimeoutMs),
-    proc.exited,
+    proc.exited.catch(() => proc.exitCode ?? 1),
   ])
 
   if (killTimer) clearTimeout(killTimer)

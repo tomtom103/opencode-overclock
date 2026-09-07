@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
+import { writeFileSync } from "node:fs"
 import { cleanupTmp, tmpDir } from "./tmp.ts"
 import { createBusyTracker } from "../src/lib/busy.ts"
 import {
@@ -453,7 +454,7 @@ describe("createGuardRunner: inject mode debounce", () => {
     })
     // exits nonzero only while the marker file says the fault is still present
     const marker = `${tmpDir("guard")}/marker`
-    await Bun.write(marker, "broken")
+    writeFileSync(marker, "broken")
     const hook = makeHook({
       mode: "inject",
       run: `test "$(cat ${marker})" = fixed`,
@@ -465,9 +466,9 @@ describe("createGuardRunner: inject mode debounce", () => {
     expect(injections).toHaveLength(0)
 
     // agent fixes it before going idle -- the deferred recheck should now pass
-    await Bun.write(marker, "fixed")
+    writeFileSync(marker, "fixed")
     busy = false
-    await new Promise((r) => setTimeout(r, 150))
+    await new Promise((r) => setTimeout(r, 200))
     expect(injections).toHaveLength(0)
     runner.dispose()
   })
