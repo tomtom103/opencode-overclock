@@ -1,27 +1,9 @@
-import { tool } from "@opencode-ai/plugin"
 import type { FeatureModule } from "../types.ts"
 import { ensureStateDir, readJson, writeJson } from "../lib/state.ts"
+import { usageStore, type DayBucket, type UsageState, type UsageTokens } from "../lib/mirror.ts"
 
-const z = tool.schema
-
-export interface UsageTokens {
-  input: number
-  output: number
-  reasoning: number
-  cacheRead: number
-  cacheWrite: number
-}
-
-export interface DayBucket {
-  cost: number
-  tokens: UsageTokens
-  messages: number
-  seen: string[]
-}
-
-export interface UsageState {
-  days: Record<string, DayBucket>
-}
+// Declared in platform/storage/store.ts so the TUI can inspect usage data without importing this feature module.
+export type { UsageTokens, DayBucket, UsageState } from "../lib/mirror.ts"
 
 export interface SessionUsage {
   sessionID: string
@@ -99,27 +81,23 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
     pruneOldDays(state, Date.now())
   }
 
+  function extractTokens(t: any): UsageTokens {
+    return {
+      input: t?.input ?? 0,
+      output: t?.output ?? 0,
+      reasoning: t?.reasoning ?? 0,
+      cacheRead: t?.cache?.read ?? 0,
+      cacheWrite: t?.cache?.write ?? 0,
+    }
+  }
+
   function onEvent(event: { type: string; properties?: unknown }): void {
     try {
       if (event.type !== "message.updated") return
-      const info = (event.properties as { info?: unknown } | undefined)?.info as
-        | {
-            id?: string
-            role?: string
-            sessionID?: string
-            time?: { created?: number; completed?: number }
-            cost?: number
-            tokens?: {
-              input?: number
-              output?: number
-              reasoning?: number
-              cache?: { read?: number; write?: number }
-            }
-          }
-        | undefined
-      if (!info || info.role !== "assistant") return
-      if (!info.time?.completed) return
+      const info = (event.properties as any)?.info
+      if (!info || info.role !== "assistant" || !info.time?.completed) return
       if (typeof info.id !== "string" || typeof info.sessionID !== "string") return
+
       const created = info.time.created ?? info.time.completed
       const day = dayKey(created)
       const bucket = state.days[day] ?? emptyBucket()
@@ -128,20 +106,15 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
       bucket.seen.push(info.id)
 
       const cost = info.cost ?? 0
-      const t = info.tokens ?? {}
-      const input = t.input ?? 0
-      const output = t.output ?? 0
-      const reasoning = t.reasoning ?? 0
-      const cacheRead = t.cache?.read ?? 0
-      const cacheWrite = t.cache?.write ?? 0
+      const tok = extractTokens(info.tokens)
 
       bucket.cost += cost
       bucket.messages += 1
-      bucket.tokens.input += input
-      bucket.tokens.output += output
-      bucket.tokens.reasoning += reasoning
-      bucket.tokens.cacheRead += cacheRead
-      bucket.tokens.cacheWrite += cacheWrite
+      bucket.tokens.input += tok.input
+      bucket.tokens.output += tok.output
+      bucket.tokens.reasoning += tok.reasoning
+      bucket.tokens.cacheRead += tok.cacheRead
+      bucket.tokens.cacheWrite += tok.cacheWrite
 
       const sess = sessions.get(info.sessionID) ?? {
         sessionID: info.sessionID,
@@ -149,8 +122,8 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
         tokens: { input: 0, output: 0 },
       }
       sess.cost += cost
-      sess.tokens.input += input
-      sess.tokens.output += output
+      sess.tokens.input += tok.input
+      sess.tokens.output += tok.output
       sessions.set(info.sessionID, sess)
 
       scheduleFlush()
@@ -236,11 +209,11 @@ export function createUsageTracker(opts: UsageTrackerOpts): UsageTracker {
  */
 export const usage: FeatureModule = {
   name: "usage",
-  tools: ["usage_report"],
+  tools: [],
   defaultEnabled: true,
   async init(ctx) {
     const dir = await ensureStateDir(ctx.directory)
-    const tracker = createUsageTracker({ statePath: `${dir}/usage.json` })
+    const tracker = createUsageTracker({ statePath: usageStore.path(ctx.directory) })
     await tracker.load()
 
     return {
@@ -253,18 +226,6 @@ export const usage: FeatureModule = {
         } catch (e) {
           console.warn(`[overclock] usage: event handling failed: ${e}`)
         }
-      },
-      tool: {
-        usage_report: tool({
-          description:
-            "Report cost/token usage for the last N days (default 7) plus today's per-session breakdown.",
-          args: {
-            days: z.number().optional().describe("number of days to report, default 7"),
-          },
-          async execute(args) {
-            return tracker.report(args.days ?? 7)
-          },
-        }),
       },
     }
   },

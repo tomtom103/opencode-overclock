@@ -1,7 +1,0 @@
-{
-  "features": {
-    "guard": {
-      "hooks": [{ "name": "typecheck", "tools": ["edit", "write"], "run": "bun run typecheck" }]
-    }
-  }
-}

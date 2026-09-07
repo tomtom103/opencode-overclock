@@ -1,8 +1,21 @@
-import type { TuiPluginApi, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
-import { rollCompanion, describeCompanion, migrateSpecies } from "./companion.ts"
-import type { Companion, Rarity } from "./types.ts"
+import type { TuiThemeCurrent } from "@opencode-ai/plugin/tui"
+import type { Ui } from "../lib/ui.ts"
+import {
+  rollCompanion,
+  describeCompanion,
+  migrateSpecies,
+  pickReaction,
+  createReactionGate,
+  cycleSpecies,
+  switchSpecies,
+  speciesDescription,
+  SPECIES,
+  type Companion,
+  type Rarity,
+  type ReactionKind,
+  type Species,
+} from "./companion.ts"
 import { spriteFrame, withBubble, spriteHeight, SPRITE_WIDTH, type SpriteState } from "./sprites.ts"
-import { pickReaction, createReactionGate, type ReactionKind } from "./reactions.ts"
 
 const KV_KEY = "buddy.companion"
 /** Below this terminal width the buddy hides rather than crowd the prompt. */
@@ -20,6 +33,8 @@ const SLEEP_AFTER_MS = 120_000
 interface SpriteNode {
   content: string
   visible: boolean
+  height?: number | string
+  fg?: unknown
   destroyed?: boolean
 }
 
@@ -38,20 +53,17 @@ function rarityColor(rarity: Rarity, theme: TuiThemeCurrent): unknown {
 
 /**
  * Hatch (or load) the companion and mount it in the prompt-right slots.
- * Dynamic import of @opentui/solid: if the host doesn't map the specifier to its
- * own instance, this throws and the caller degrades to "no buddy" -- it must
- * never take the rest of the TUI plugin down.
+ * `enableJsx` throws when the host does not map @opentui/solid to its own instance;
+ * the caller degrades to "no buddy" and the rest of the TUI plugin is unaffected.
  */
-export async function registerBuddy(api: TuiPluginApi): Promise<void> {
-  const { jsx } = (await import("@opentui/solid/jsx-runtime")) as unknown as {
-    jsx: (type: string, props?: Record<string, unknown> | null) => unknown
-  }
+export async function registerBuddy(ui: Ui): Promise<void> {
+  await ui.enableJsx()
 
-  let companion = api.kv.get<Companion | undefined>(KV_KEY, undefined)
+  let companion = ui.api.kv?.get<Companion | undefined>(KV_KEY, undefined)
   if (!companion) {
     companion = rollCompanion()
-    api.kv.set(KV_KEY, companion)
-    api.ui.toast({ message: `a buddy hatched: ${describeCompanion(companion)}` })
+    ui.api.kv?.set(KV_KEY, companion)
+    ui.toast(`a buddy hatched: ${describeCompanion(companion)}`)
   } else {
     // A companion persisted under a species we have since retired has no art:
     // every lookup into ART would throw from inside the slot render, where the
@@ -60,11 +72,11 @@ export async function registerBuddy(api: TuiPluginApi): Promise<void> {
     const migrated = migrateSpecies(companion)
     if (migrated) {
       companion = migrated
-      api.kv.set(KV_KEY, migrated)
-      api.ui.toast({ message: `${migrated.name} is a ${migrated.species} now` })
+      ui.api.kv?.set(KV_KEY, migrated)
+      ui.toast(`${migrated.name} is a ${migrated.species} now`)
     }
   }
-  const hatched: Companion = companion
+  let active: Companion = companion
 
   // One ticker drives every mounted node (home + session slots).
   const nodes = new Set<SpriteNode>()
@@ -82,9 +94,9 @@ export async function registerBuddy(api: TuiPluginApi): Promise<void> {
 
   function paint(): void {
     const now = Date.now()
-    const frame = spriteFrame(hatched.species, currentState(now), tick)
+    const frame = spriteFrame(active.species, currentState(now), tick)
     const text = withBubble(frame, now < bubbleUntil ? bubble : undefined)
-    const wide = api.renderer.width >= MIN_COLS
+    const wide = (ui.api.renderer?.width ?? 120) >= MIN_COLS
     for (const node of [...nodes]) {
       try {
         if (node.destroyed) {
@@ -108,29 +120,116 @@ export async function registerBuddy(api: TuiPluginApi): Promise<void> {
     paint()
   }
 
-  const timer = setInterval(() => {
+  function setCompanion(next: Companion, toastMessage?: string): void {
+    active = next
+    ui.api.kv?.set(KV_KEY, next)
+    const currentTheme = ui.api.theme?.current
+    for (const node of [...nodes]) {
+      try {
+        if (node.destroyed) {
+          nodes.delete(node)
+          continue
+        }
+        if (currentTheme) {
+          node.fg = rarityColor(active.rarity, currentTheme)
+        }
+        node.height = spriteHeight(active.species)
+      } catch {
+        nodes.delete(node)
+      }
+    }
+    react("pet")
+    ui.toast(toastMessage ?? describeCompanion(active))
+  }
+
+  function openSwitchDialog(dialog?: unknown): void {
+    const stack = (dialog ?? ui.api.ui?.dialog) as
+      { replace(render: () => unknown, onClose?: () => void): void; clear(): void } | undefined
+    const DialogSelect = ui.api.ui?.DialogSelect
+
+    if (!stack || typeof stack.replace !== "function" || !DialogSelect) {
+      const next = cycleSpecies(active.species)
+      setCompanion(
+        switchSpecies(active, next),
+        `switched to ${next}: ${describeCompanion(switchSpecies(active, next))}`,
+      )
+      return
+    }
+
+    let closed = false
+    const selectBuddy = (speciesOrRandom: string) => {
+      if (closed) return
+      closed = true
+      try {
+        stack.clear()
+      } catch {
+        // ignore
+      }
+      if (speciesOrRandom === "random") {
+        const fresh = rollCompanion()
+        setCompanion(fresh, `a new buddy hatched: ${describeCompanion(fresh)}`)
+      } else if ((SPECIES as readonly string[]).includes(speciesOrRandom)) {
+        const nextSpecies = speciesOrRandom as Species
+        setCompanion(
+          switchSpecies(active, nextSpecies),
+          `switched to ${nextSpecies}: ${describeCompanion(switchSpecies(active, nextSpecies))}`,
+        )
+      }
+    }
+
+    const options = [
+      ...SPECIES.map((species) => ({
+        title: species,
+        value: species,
+        description: speciesDescription(species, species === active.species),
+        onSelect: () => selectBuddy(species),
+      })),
+      {
+        title: "random roll",
+        value: "random",
+        description: "hatch a brand new companion with new stats & rarity",
+        onSelect: () => selectBuddy("random"),
+      },
+    ]
+
+    try {
+      stack.replace(() =>
+        ui.node(DialogSelect as any, {
+          title: "Switch Buddy",
+          placeholder: "Select a species...",
+          current: active.species,
+          options,
+          onSelect: (opt: { value: string }) => selectBuddy(opt.value),
+        }),
+      )
+    } catch {
+      const next = cycleSpecies(active.species)
+      setCompanion(
+        switchSpecies(active, next),
+        `switched to ${next}: ${describeCompanion(switchSpecies(active, next))}`,
+      )
+    }
+  }
+
+  ui.every(TICK_MS, () => {
     tick++
     paint()
-  }, TICK_MS)
-  api.lifecycle.onDispose(async () => clearInterval(timer))
+  })
 
   const gate = createReactionGate()
-  const unsubs = [
-    api.event.on("session.status", (event) => {
-      lastActivity = Date.now()
-      if (event.properties.status.type === "idle" && gate.tryFire()) react("done")
-    }),
-    api.event.on("session.error", () => {
-      if (gate.tryFire()) react("error")
-    }),
-    api.event.on("permission.asked", () => {
-      if (gate.tryFire()) react("permission")
-    }),
-    api.event.on("question.asked", () => {
-      if (gate.tryFire()) react("question")
-    }),
-  ]
-  for (const unsub of unsubs) api.lifecycle.onDispose(async () => unsub())
+  ui.on("session.status", (event) => {
+    lastActivity = Date.now()
+    if (event.properties?.status?.type === "idle" && gate.tryFire()) react("done")
+  })
+  ui.on("session.error", () => {
+    if (gate.tryFire()) react("error")
+  })
+  ui.on("permission.asked", () => {
+    if (gate.tryFire()) react("permission")
+  })
+  ui.on("question.asked", () => {
+    if (gate.tryFire()) react("question")
+  })
 
   // The host renders the slot inside a one-line flex row next to the agent/model
   // text (prompt/index.tsx: justifyContent="space-between"). An in-flow sprite
@@ -139,44 +238,55 @@ export async function registerBuddy(api: TuiPluginApi): Promise<void> {
   // parent's edges, and bottom/right pin the creature's last row onto the
   // agent/model line while it grows upward over the (usually empty) input area.
   const renderSprite = (theme: TuiThemeCurrent) =>
-    jsx("text", {
+    ui.node("text", {
       position: "absolute",
       bottom: 0,
       right: 0,
       width: SPRITE_WIDTH,
-      height: spriteHeight(hatched.species),
-      content: spriteFrame(hatched.species, "idle", tick),
-      fg: rarityColor(hatched.rarity, theme),
+      height: spriteHeight(active.species),
+      content: spriteFrame(active.species, "idle", tick),
+      fg: rarityColor(active.rarity, theme),
       selectable: false,
-      visible: api.renderer.width >= MIN_COLS,
+      visible: (ui.api.renderer?.width ?? 120) >= MIN_COLS,
       ref: (node: SpriteNode | undefined) => {
         if (node) nodes.add(node)
       },
     })
 
-  // register returns the assigned plugin id, not a disposer -- the host owns
-  // slot cleanup when the TUI plugin deactivates.
-  api.slots.register({
-    slots: {
-      home_prompt_right: (ctx) => renderSprite(ctx.theme.current),
-      session_prompt_right: (ctx) => renderSprite(ctx.theme.current),
+  ui.slots({
+    home_prompt_right: (ctx) => renderSprite(ctx.theme.current),
+    session_prompt_right: (ctx) => renderSprite(ctx.theme.current),
+  })
+
+  ui.command({
+    title: "Overclock: Pet buddy",
+    slash: "oc-buddy",
+    aliases: ["buddy"],
+    run: () => {
+      react("pet")
+      ui.toast(describeCompanion(active))
     },
   })
 
-  try {
-    const uncommand = api.command?.register(() => [
-      {
-        title: "Overclock: Pet buddy",
-        value: "overclock.buddy",
-        slash: { name: "oc-buddy" },
-        onSelect: async () => {
-          react("pet")
-          api.ui.toast({ message: describeCompanion(hatched) })
-        },
-      },
-    ])
-    if (uncommand) api.lifecycle.onDispose(async () => uncommand())
-  } catch (e) {
-    console.warn(`[overclock-tui] /oc-buddy command registration failed: ${e}`)
-  }
+  ui.command({
+    title: "Overclock: Switch buddy",
+    slash: "oc-buddy-switch",
+    aliases: ["buddy-switch"],
+    run: (dialog) => {
+      openSwitchDialog(dialog)
+    },
+  })
+
+  ui.command({
+    title: "Overclock: Cycle buddy",
+    slash: "oc-buddy-cycle",
+    aliases: ["buddy-cycle"],
+    run: () => {
+      const next = cycleSpecies(active.species)
+      setCompanion(
+        switchSpecies(active, next),
+        `switched to ${next}: ${describeCompanion(switchSpecies(active, next))}`,
+      )
+    },
+  })
 }

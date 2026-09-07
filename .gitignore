@@ -7,8 +7,6 @@ node_modules/
 coverage/
 *.tsbuildinfo
 
-.claude/
-
 # local provider/auth setup (machine-specific; scripts/verify-pack.sh reads it if present)
 .opencode/opencode.json
 .opencode/tui.json

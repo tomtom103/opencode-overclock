@@ -32,7 +32,7 @@ fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
 note() { printf '  \033[33m····\033[0m %s\n' "$1"; }
 
 echo "== pack =="
-TARBALL="$(cd "$REPO" && npm pack --silent --pack-destination "$WORK")" || { echo "npm pack failed"; exit 1; }
+TARBALL="$(cd "$REPO" && npm pack --cache "$WORK/.npm-cache" --silent --pack-destination "$WORK")" || { echo "npm pack failed"; exit 1; }
 TARBALL="$WORK/$TARBALL"
 echo "  $TARBALL"
 
@@ -54,10 +54,10 @@ echo "== manifest =="
 PROJ="$WORK/proj"
 mkdir -p "$PROJ" && cd "$PROJ"
 git init -q . && echo verify > README.md
-git add -A && git -c user.email=v@v -c user.name=v commit -qm init
+git add -A && git -c user.email=v@v -c user.name=v -c commit.gpgsign=false commit --no-gpg-sign -qm init
 
 TLOG="$WORK/manifest.log"
-timeout 90 opencode plugin "$UNPACKED" --force > "$TLOG" 2>&1 </dev/null
+XDG_DATA_HOME="$WORK/data" XDG_STATE_HOME="$WORK/state" timeout 90 opencode plugin "$UNPACKED" --force > "$TLOG" 2>&1 </dev/null
 if grep -q "server + tui targets" "$TLOG"; then
   pass "exposes both targets: $(grep -o 'Detected.*targets' "$TLOG" | head -1)"
 else
@@ -119,7 +119,7 @@ fs.writeFileSync(target, JSON.stringify({
 echo "== runtime load =="
 LOG="$WORK/server.log"
 timeout 150 opencode run --print-logs -m "$MODEL" \
-  "Call the usage_report tool once and print its output verbatim. Do nothing else." \
+  "Call the schedule_list tool once and print its output verbatim. Do nothing else." \
   > "$LOG" 2>&1 </dev/null
 
 grep -qi "ProviderModelNotFoundError" "$LOG" \

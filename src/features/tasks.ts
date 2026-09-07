@@ -2,7 +2,10 @@ import { stat } from "node:fs/promises"
 import { tool } from "@opencode-ai/plugin"
 import type { FeatureModule } from "../types.ts"
 import { ensureStateDir, shellQuote, writeJson } from "../lib/state.ts"
+import { taskStore, type TaskMirrorEntry } from "../lib/mirror.ts"
 import { inject, toast } from "../lib/inject.ts"
+import { NON_INTERACTIVE_ENV } from "../lib/exec.ts"
+import { spawnTaskPane, type TmuxPane } from "../lib/tmux.ts"
 
 const z = tool.schema
 
@@ -15,6 +18,22 @@ const PROMPT_PATTERNS = [
   /Continue\?/i,
   /Overwrite\?/i,
 ]
+
+const INTERACTIVE_COMMAND_PATTERNS = [
+  /^\s*(?:vi|vim|nvim|nano|pico|emacs)\b/i,
+  /^\s*git\s+(?:rebase\s+-i|commit\s+--amend(?!\s+-m))/i,
+  /^\s*git\s+add\s+-p\b/i,
+  /^\s*(?:python|python3|node|irb|ghci|bash|sh|zsh)\s*$/i,
+]
+
+/** Detects if a command is explicitly interactive (e.g. editor, rebase -i, bare REPL). */
+export function detectInteractiveCommand(command: string): string | null {
+  for (const pattern of INTERACTIVE_COMMAND_PATTERNS) {
+    const match = command.match(pattern)
+    if (match) return match[0].trim()
+  }
+  return null
+}
 
 /** Last non-empty line of `tail` looks like an interactive y/n or press-key prompt. */
 export function looksLikePrompt(tail: string): boolean {
@@ -39,14 +58,7 @@ interface TaskEntry extends TaskRecord {
   stallTimer?: ReturnType<typeof setInterval>
   stallNotified: boolean
   startedAt: number
-}
-
-interface TaskMirrorEntry {
-  id: string
-  description: string
-  status: TaskRecord["status"]
-  exitCode: number | null
-  startedAt: number
+  tmuxPane?: TmuxPane
 }
 
 export interface TaskManager {
@@ -95,7 +107,8 @@ function startStallWatchdog(
           lastGrowth = Date.now()
           return
         }
-        if (Date.now() - lastGrowth < thresholdMs || entry.stallNotified) return
+        if (Date.now() - lastGrowth < thresholdMs || entry.stallNotified || entry.status !== "running")
+          return
         const file = Bun.file(entry.logPath)
         const start = Math.max(0, s.size - tailBytes)
         const tail = await file.slice(start).text()
@@ -125,6 +138,8 @@ export function createTaskManager(opts: {
   stallCheckIntervalMs?: number
   stallThresholdMs?: number
   stallTailBytes?: number
+  /** spawn a tmux split pane to tail task logs (only if TMUX is active) */
+  tmux?: boolean
 }): TaskManager {
   const tasks = new Map<string, TaskEntry>()
   let counter = 0
@@ -153,6 +168,10 @@ export function createTaskManager(opts: {
     // shell-level redirection: no piping code, survives plugin restart losing streams
     const proc = Bun.spawn(["bash", "-c", `(${input.command}) >> ${shellQuote(logPath)} 2>&1`], {
       cwd: input.cwd,
+      env: {
+        ...process.env,
+        ...NON_INTERACTIVE_ENV,
+      },
     })
     const entry: TaskEntry = {
       id,
@@ -169,6 +188,13 @@ export function createTaskManager(opts: {
     }
     tasks.set(id, entry)
     persistMirror()
+    let panePromise: Promise<TmuxPane | null> | undefined
+    if (opts.tmux) {
+      panePromise = spawnTaskPane(entry.logPath, entry.description)
+      panePromise.then((pane) => {
+        if (pane) entry.tmuxPane = pane
+      })
+    }
     if (input.timeoutMs) {
       entry.timeoutTimer = setTimeout(() => kill(id), input.timeoutMs)
     }
@@ -181,9 +207,15 @@ export function createTaskManager(opts: {
         opts.onStall,
       )
     }
-    proc.exited.then((code) => {
+    proc.exited.then(async (code) => {
       if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
       if (entry.stallTimer) clearInterval(entry.stallTimer)
+      if (panePromise) {
+        const pane = await panePromise
+        pane?.close()
+      } else if (entry.tmuxPane) {
+        void entry.tmuxPane.close()
+      }
       if (entry.status === "running") entry.status = "exited"
       entry.exitCode = code
       persistMirror()
@@ -199,6 +231,7 @@ export function createTaskManager(opts: {
     persistMirror()
     if (entry.stallTimer) clearInterval(entry.stallTimer)
     entry.stallTimer = undefined
+    if (entry.tmuxPane) void entry.tmuxPane.close()
     entry.proc.kill("SIGTERM")
     const hard = setTimeout(() => entry.proc.kill("SIGKILL"), 3000)
     entry.proc.exited.then(() => clearTimeout(hard))
@@ -237,17 +270,10 @@ const fmt = (t: TaskRecord) =>
 export const tasks: FeatureModule = {
   name: "tasks",
   tools: ["task_run", "task_status", "task_output", "task_kill"],
-  options: {
-    killOnExit: "boolean",
-    stallDetection: "boolean",
-    stallThresholdMs: "number",
-    stallCheckIntervalMs: "number",
-  },
   defaultEnabled: true,
   requires: ["session.promptAsync", "session.messages"],
   async init(ctx, options, shared) {
     const logDir = await ensureStateDir(ctx.directory, "tasks")
-    const stateDir = await ensureStateDir(ctx.directory)
     const killOnExit = options.killOnExit !== false
     const stallDetection = options.stallDetection !== false
     const stallThresholdMs =
@@ -257,7 +283,8 @@ export const tasks: FeatureModule = {
 
     const manager = createTaskManager({
       logDir,
-      mirrorPath: `${stateDir}/tasks.json`,
+      mirrorPath: taskStore.path(ctx.directory),
+      tmux: options.tmux === true,
       onExit: async (task) => {
         if (task.status === "killed") return
         const tail = await manager.output(task.id, 20)
@@ -293,6 +320,9 @@ export const tasks: FeatureModule = {
     })
 
     return {
+      "shell.env": async (_input, output) => {
+        Object.assign(output.env, NON_INTERACTIVE_ENV)
+      },
       dispose: async () => {
         if (killOnExit) manager.killAll()
       },
@@ -307,6 +337,10 @@ export const tasks: FeatureModule = {
             timeout: z.number().optional().describe("seconds until auto-kill"),
           },
           async execute(args, tctx) {
+            const blocked = detectInteractiveCommand(args.command)
+            if (blocked) {
+              return `Error: Command '${args.command}' appears to require interactive input (${blocked}). Background tasks run non-interactively and will hang on prompts.`
+            }
             const task = manager.run({
               command: args.command,
               description: args.description,

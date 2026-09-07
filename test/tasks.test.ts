@@ -3,6 +3,7 @@ import { tmpDir, cleanupTmp } from "./tmp.ts"
 import {
   createTaskManager,
   looksLikePrompt,
+  detectInteractiveCommand,
   type TaskRecord,
   type TaskManager,
 } from "../src/features/tasks.ts"
@@ -167,5 +168,21 @@ describe("stall watchdog", () => {
     })
     expect(rec.exitCode).toBe(0)
     expect(stallFired).toBe(false)
+  })
+
+  test("detectInteractiveCommand identifies interactive commands", () => {
+    expect(detectInteractiveCommand("vim file.txt")).toBe("vim")
+    expect(detectInteractiveCommand("nano /etc/hosts")).toBe("nano")
+    expect(detectInteractiveCommand("git rebase -i HEAD~3")).toBe("git rebase -i")
+    expect(detectInteractiveCommand("git commit --amend")).toBe("git commit --amend")
+    expect(detectInteractiveCommand("python3")).toBe("python3")
+    expect(detectInteractiveCommand("node")).toBe("node")
+
+    // Non-interactive variants should not be blocked
+    expect(detectInteractiveCommand("git commit -m 'feat: update'")).toBeNull()
+    expect(detectInteractiveCommand("git commit --amend -m 'fix: update'")).toBeNull()
+    expect(detectInteractiveCommand("python3 script.py")).toBeNull()
+    expect(detectInteractiveCommand("node index.js")).toBeNull()
+    expect(detectInteractiveCommand("echo hi")).toBeNull()
   })
 })

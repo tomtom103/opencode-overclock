@@ -1,4 +1,74 @@
-import { SPECIES, type Companion, type CompanionStats, type Rarity } from "./types.ts"
+import type { SpriteState } from "./sprites.ts"
+
+export const SPECIES = [
+  "cat",
+  "dog",
+  "bunny",
+  "owl",
+  "bat",
+  "penguin",
+  "duck",
+  "ghost",
+  "slime",
+] as const
+export type Species = (typeof SPECIES)[number]
+
+export type Rarity = "common" | "uncommon" | "rare" | "legendary"
+
+export interface CompanionStats {
+  patience: number
+  chaos: number
+  wisdom: number
+  snark: number
+}
+
+export interface Companion {
+  species: Species
+  rarity: Rarity
+  name: string
+  stats: CompanionStats
+  hatchedAt: number
+}
+
+export type ReactionKind = "done" | "error" | "permission" | "question" | "pet"
+
+/** Speech-bubble line + which face the sprite pulls while it shows. */
+export interface Reaction {
+  text: string
+  state: SpriteState
+}
+
+// Lines render into the sprite's 12-col effect row -- keep every line <= 12 chars.
+const POOLS: Record<ReactionKind, { lines: string[]; state: SpriteState }> = {
+  done: { lines: ["cooked", "ate that", "big W", "say less", "we ball"], state: "idle" },
+  error: { lines: ["bruh", "ur cooked", "skill issue", "aint no way", "big L"], state: "alarmed" },
+  permission: { lines: ["let me cook", "valid?", "we good?", "bet?", "vibe check"], state: "curious" },
+  question: { lines: ["wym?", "the move?", "u tell me", "spill", "hbu?"], state: "curious" },
+  pet: { lines: ["pookie!", "w rizz", "ur valid", "slay", "ily"], state: "pet" },
+}
+
+/** Pure: pick a random line for a reaction kind. */
+export function pickReaction(kind: ReactionKind, rng: () => number = Math.random): Reaction {
+  const pool = POOLS[kind]
+  return { text: pool.lines[Math.floor(rng() * pool.lines.length)]!, state: pool.state }
+}
+
+export interface ReactionGate {
+  /** True + arms the cooldown if enough time has passed since the last fire. */
+  tryFire(now?: number): boolean
+}
+
+/** Debounce for event-driven reactions -- keeps a busy session from spamming the bubble. */
+export function createReactionGate(cooldownMs = 8000): ReactionGate {
+  let last = -Infinity
+  return {
+    tryFire(now: number = Date.now()): boolean {
+      if (now - last < cooldownMs) return false
+      last = now
+      return true
+    },
+  }
+}
 
 const RARITY_WEIGHTS: { rarity: Rarity; weight: number }[] = [
   { rarity: "common", weight: 60 },
@@ -55,14 +125,43 @@ function rollStat(rng: () => number): number {
 }
 
 /**
- * Companions persist in TUI kv and outlive the sprite sheet, so an install that
- * hatched a species we have since retired would look it up and find no art. Move
- * it onto a species we still draw, keeping the identity that isn't the drawing:
- * same name, rarity, stats and hatch date. Returns undefined when nothing to do.
+ * Move companion onto an active species if its hatched species was retired.
  */
 export function migrateSpecies(c: Companion, rng: () => number = Math.random): Companion | undefined {
   if ((SPECIES as readonly string[]).includes(c.species)) return undefined
   return { ...c, species: pick(rng, SPECIES) }
+}
+
+/** Short character descriptions for each species based on their idle fidget. */
+export const SPECIES_DESCRIPTIONS: Record<Species, string> = {
+  cat: "tail flick",
+  dog: "ear perk",
+  bunny: "ear wiggle",
+  owl: "feather ruffle",
+  bat: "wing beat",
+  penguin: "waddle",
+  duck: "ripples",
+  ghost: "float",
+  slime: "squash",
+}
+
+/** Pure: formatted description for dialog options. */
+export function speciesDescription(species: Species, isCurrent = false): string {
+  const desc = SPECIES_DESCRIPTIONS[species] ?? species
+  return isCurrent ? `${desc} (current)` : desc
+}
+
+/** Move companion to a new species, preserving name, stats, and hatchedAt. */
+export function switchSpecies(c: Companion, species: Species): Companion {
+  if (!(SPECIES as readonly string[]).includes(species)) return c
+  return { ...c, species }
+}
+
+/** Pure: get the next species in the SPECIES rotation. */
+export function cycleSpecies(current: Species): Species {
+  const idx = SPECIES.indexOf(current)
+  if (idx === -1) return SPECIES[0]
+  return SPECIES[(idx + 1) % SPECIES.length]!
 }
 
 /** One-line card for the /oc-buddy toast. */

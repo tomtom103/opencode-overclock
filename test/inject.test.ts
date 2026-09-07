@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { inject, sessionModel } from "../src/lib/inject.ts"
+import { inject, sessionModel, sessionContext } from "../src/lib/inject.ts"
 
 function mockClient(messages: any[], onPrompt?: (opts: any) => void) {
   return {
@@ -10,10 +10,10 @@ function mockClient(messages: any[], onPrompt?: (opts: any) => void) {
   } as any
 }
 
-const assistant = (providerID: string, modelID: string) => ({
-  info: { role: "assistant", providerID, modelID },
+const assistant = (providerID: string, modelID: string, agent?: string) => ({
+  info: { role: "assistant", providerID, modelID, ...(agent ? { agent } : {}) },
 })
-const user = () => ({ info: { role: "user" } })
+const user = (agent?: string) => ({ info: { role: "user", ...(agent ? { agent } : {}) } })
 
 describe("sessionModel", () => {
   test("picks LAST assistant message model", async () => {
@@ -40,16 +40,32 @@ describe("sessionModel", () => {
     } as any
     expect(await sessionModel(c, "s")).toBeUndefined()
   })
+
+  test("sessionContext preserves agent and model", async () => {
+    const c = mockClient([user(), assistant("anthropic", "claude-sonnet-5", "reviewer")])
+    const ctx = await sessionContext(c, "s")
+    expect(ctx.model).toEqual({ providerID: "anthropic", modelID: "claude-sonnet-5" })
+    expect(ctx.agent).toBe("reviewer")
+  })
 })
 
 describe("inject", () => {
-  test("passes session model in body", async () => {
+  test("passes session model and agent in body", async () => {
     let sent: any
-    const c = mockClient([assistant("anthropic", "claude-sonnet-5")], (o) => (sent = o))
+    const c = mockClient([assistant("anthropic", "claude-sonnet-5", "reviewer")], (o) => (sent = o))
     expect(await inject(c, "s1", "hi")).toBe(true)
     expect(sent.path.id).toBe("s1")
     expect(sent.body.model).toEqual({ providerID: "anthropic", modelID: "claude-sonnet-5" })
+    expect(sent.body.agent).toBe("reviewer")
     expect(sent.body.parts).toEqual([{ type: "text", text: "hi" }])
+    expect(sent.body.noReply).toBeUndefined()
+  })
+
+  test("supports noReply flag", async () => {
+    let sent: any
+    const c = mockClient([assistant("anthropic", "claude-sonnet-5")], (o) => (sent = o))
+    expect(await inject(c, "s1", "silent update", { noReply: true })).toBe(true)
+    expect(sent.body.noReply).toBe(true)
   })
 
   test("omits model when unknown", async () => {

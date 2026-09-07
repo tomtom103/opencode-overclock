@@ -27,34 +27,32 @@ So 1.15.11 is the floor for the server surface and 1.18.4 for the buddy; we gate
 
 One npm package can ship server + tui via separate exports (`exports["./server"]`, `"./tui"`); a single module can't have both (`tui?: never`).
 
-## Lifecycle (CC hook -> opencode)
+## OpenCode Lifecycle & Hook Mapping
 
-| CC hook             | opencode                                                 | Fidelity              |
-| ------------------- | -------------------------------------------------------- | --------------------- |
-| SessionStart        | `session.created` event + inject on first `chat.message` | emulated              |
-| UserPromptSubmit    | `chat.message`                                           | full                  |
-| PreToolUse          | `tool.execute.before` (`permission.ask` is dead code)    | partial               |
-| PostToolUse         | `tool.execute.after`                                     | full, better          |
-| Notification        | `permission.asked` event + `client.tui.*` toasts         | full                  |
-| Stop / SubagentStop | none — emulate via `session.status {idle}`               | emulated, biggest gap |
-| PreCompact          | `experimental.session.compacting`                        | full                  |
-| SessionEnd          | `session.deleted` event, `dispose`                       | partial               |
+| Lifecycle Stage     | opencode hook / event                                    | Description            |
+| ------------------- | -------------------------------------------------------- | ---------------------- |
+| Session Created     | `session.created` event + inject on first `chat.message` | Session initialization |
+| User Prompt Submit  | `chat.message`                                           | Mutate user prompt     |
+| Pre-Tool Execution  | `tool.execute.before` (`permission.ask` is dead code)    | Inspect/rewrite args   |
+| Post-Tool Execution | `tool.execute.after`                                     | Inspect/modify output  |
+| Notification        | `permission.asked` event + `client.tui.*` toasts         | User attention/toasts  |
+| Turn Idle / Finish  | `session.status {idle}`                                  | Idle loop / feedback   |
+| Pre-Compact         | `experimental.session.compacting`                        | Compaction context     |
+| Session Disposal    | `session.deleted` event, `dispose`                       | Resource cleanup       |
 
 Notes per row:
 
-- **SessionStart** — `session.created` payload is `{sessionID, info}` (runtime includes `sessionID`; frozen v1 SDK type omits it).
-- **UserPromptSubmit** — mutate `output.message` (persists) and `output.parts` **in place**; reassigning `output.parts` is a no-op. Does not fire for the compaction auto-continue message.
-- **PreToolUse** — the `permission.ask` hook is **declared in types but never invoked** (zero call sites; the permission service never consults plugins). Gate instead via the `permission.asked` event + SDK reply, or throw from `tool.execute.before` (becomes a fiber defect — crashes the step, ugly). Arg rewrites: mutate `output.args` in place; fires before the permission prompt.
-- **PostToolUse** — mutate `title`/`output`/`metadata` in place; affects what the model sees AND what persists (better than CC's append-only feedback). Caveats: MCP-proxied tools receive the raw `CallToolResult` (mutate `content`; `title` ignored); the task-tool path may pass `output === undefined`.
+- **Session Created** — `session.created` payload is `{sessionID, info}` (runtime includes `sessionID`; frozen v1 SDK type omits it).
+- **User Prompt Submit** — mutate `output.message` (persists) and `output.parts` **in place**; reassigning `output.parts` is a no-op. Does not fire for the compaction auto-continue message.
+- **Pre-Tool Execution** — the `permission.ask` hook is **declared in types but never invoked** (zero call sites; the permission service never consults plugins). Gate instead via the `permission.asked` event + SDK reply, or throw from `tool.execute.before` (becomes a fiber defect — crashes the step, ugly). Arg rewrites: mutate `output.args` in place; fires before the permission prompt.
+- **Post-Tool Execution** — mutate `title`/`output`/`metadata` in place; affects what the model sees AND what persists. Caveats: MCP-proxied tools receive the raw `CallToolResult` (mutate `content`; `title` ignored); the task-tool path may pass `output === undefined`.
 - **Notification** — toasts and TUI control from server plugins via `client.tui.showToast()` / `client.tui.publish()` (`tui.toast.show`, `tui.prompt.append`, `tui.command.execute`, `tui.session.select`). TUI plugins additionally get `api.attention.notify()` = OS notification + sound packs.
-- **Stop** — subscribe `session.status` and match `{status:{type:"idle"}}` (preferred; `session.idle` still fires but is marked deprecated upstream), then check and `client.session.prompt()` to continue. Per-assistant-turn granularity: `session.next.step.ended` (finish reason, cost, tokens). Disambiguate abort/error via `session.error`. End-of-turn order: `step.ended` -> `message.updated` (assistant, `time.completed` set) -> `session.status{idle}` -> `session.idle`.
-- **Stop/injection caveat (found live 2026-07-29)** — `session.promptAsync` (`POST /session/:id/prompt_async`) without `body.model` runs the injected turn on the **config default model**, not the session's model. Wrong model + unreachable default = turn hangs forever, later injections pile up QUEUED behind it. Always resolve the session's model (last assistant message `providerID`/`modelID` via `session.messages`) and pass it explicitly. Same applies to `session.prompt`. Fires while a turn is running queue server-side and drain at turn end — for periodic injection, skip fires while target is busy (track via `session.status`).
-- **PreCompact** — `output.context.push()` appends to the default prompt; `output.prompt =` replaces it entirely (discards previous-summary handling).
-- **SessionEnd** — `dispose` runs when the instance scope closes.
+- **Turn Idle** — subscribe `session.status` and match `{status:{type:"idle"}}` (preferred; `session.idle` still fires but is marked deprecated upstream), then check and `client.session.prompt()` to continue. Per-assistant-turn granularity: `session.next.step.ended` (finish reason, cost, tokens). Disambiguate abort/error via `session.error`. End-of-turn order: `step.ended` -> `message.updated` (assistant, `time.completed` set) -> `session.status{idle}` -> `session.idle`.
+- **Injection caveat (found live 2026-07-29)** — `session.promptAsync` (`POST /session/:id/prompt_async`) without `body.model` runs the injected turn on the **config default model**, not the session's model. Wrong model + unreachable default = turn hangs forever, later injections pile up QUEUED behind it. Always resolve the session's model (last assistant message `providerID`/`modelID` via `session.messages`) and pass it explicitly. Same applies to `session.prompt`. Fires while a turn is running queue server-side and drain at turn end — for periodic injection, skip fires while target is busy (track via `session.status`).
+- **Pre-Compact** — `output.context.push()` appends to the default prompt; `output.prompt =` replaces it entirely (discards previous-summary handling).
+- **Session Disposal** — `dispose` runs when the instance scope closes.
 
-Protocol diff: CC = shell cmd, JSON stdin/stdout, exit codes. opencode = in-process JS. CC hook scripts need a translation shim (`cc-hooks` module).
-
-Execution semantics (matters for the shim): hooks run **serially in plugin load order**, same `output` object passed by reference to each. A throwing hook is a defect (kills the fiber) except `config` (logged + ignored) and `event` (fire-and-forget, unhandled rejection). Internal plugins load before user plugins.
+Execution semantics: hooks run **serially in plugin load order**, same `output` object passed by reference to each. A throwing hook is a defect (kills the fiber) except `config` (logged + ignored) and `event` (fire-and-forget, unhandled rejection). Internal plugins load before user plugins.
 
 ## v1 hooks — full inventory
 
@@ -127,6 +125,32 @@ Types-only in `@opencode-ai/plugin/v2/{effect,promise}` (promise = thin adapter 
 
 **Not in v2 yet**: tool execution hooks, events, session/permission/chat hooks (drafts exist unwired: `event.ts`, `npm.ts`, `filesystem.ts`, `location.ts`, `path.ts`). v1 remains the only way to intercept tools/events. Config key: v2 uses `plugins` (v1 `plugin` auto-migrates in `packages/core/src/v1/config/migrate.ts` — succession signal). Loading: `plugins: [{package, options}]` + `{plugin,plugins}/*.{ts,js}` config dirs; broken v2 plugins are silently skipped.
 
+### The Hybrid V1/V2 Bridge (`src/core/bridge.ts`, re-exported via `src/bridge.ts`)
+
+Because V1 provides execution-level power (`tool`, `tool.execute.before/after`, `event`) while V2 provides domain transforms (`agent`, `command`, `catalog`, `aisdk`), Overclock provides a hybrid bridge (`createHybridPlugin`) that is dual-conforming:
+
+- **Callable function**: satisfies the V1 loader (`plugin(input, options) => Promise<Hooks>`).
+- **`{ id, server }`**: satisfies the V1 module export specification.
+- **`{ id, setup }`**: satisfies the V2 module export specification (`setup(context)`).
+
+`FeatureModule` supports both lifecycles:
+
+- `init(ctx, options, shared)`: runs in V1 to contribute tools and hook into events.
+- `setup(context, options)`: runs in V2 to register domain transforms.
+
+### Concurrent V1 + V2 Plugin Hosting on V1 (`src/v2/`)
+
+On an OpenCode V1 runtime, external V2 plugins cannot be loaded natively by the host (which expects a function or `{ server: Function }`). Overclock embeds a complete in-process V2 Host engine (`src/v2/host.ts`, `src/v2/context.ts`, `src/v2/loader.ts`):
+
+- **Synthetic `PluginContext`**: Instantiates a spec-conforming `PluginContext` backed by in-memory domain transforms.
+- **V1 Hook Adaptation**:
+  - `agent.transform` / `command.transform` / `catalog.transform` $\rightarrow$ applied to the live OpenCode config in V1's `config(cfg)` hook.
+  - `reference.transform` $\rightarrow$ injected into the system prompt via `experimental.chat.system.transform`.
+  - `aisdk.sdk` $\rightarrow$ executed during `chat.params` before LLM calls (`aisdk.language` transforms registered in draft state).
+  - `plugin.add` / `plugin.remove` $\rightarrow$ supports dynamic nested V2 plugin loading with scope-owned resource disposal.
+- **Polyglot V2 Plugin Loading**: Loads promise-based (`setup`) and effect-based (`effect`) V2 plugins from local files, file URLs, or package specifiers via `options.plugins`.
+- **Concurrent Execution**: Runs full V1 tools and event subscriptions side-by-side with V2 domain transforms in the exact same OpenCode session.
+
 ## Plugin loading (v1)
 
 - Discovery: `plugin` config array (string or `[spec, options]`; relative specs resolve against the declaring config file) + auto-glob `{plugin,plugins}/*.{ts,js}` in every config dir (`~/.config/opencode`, each `.opencode` cwd->worktree, `~/.opencode`, `OPENCODE_CONFIG_DIR`).
@@ -141,43 +165,39 @@ Types-only in `@opencode-ai/plugin/v2/{effect,promise}` (promise = thin adapter 
 
 Verified live on 1.18.4 by reading the host's own registry at `GET /experimental/tool/ids`, which is what gets serialized to the provider.
 
-- The `tool` hook is `{[key: string]: ToolDefinition}` and **the key is the id sent to the provider**. Renaming is therefore a pure config concern — no feature module needs to know. overclock folds preset + explicit renames + allowlist into one policy in `src/tools.ts` and applies it in the single `mergeHooks` chokepoint.
+- The `tool` hook is `{[key: string]: ToolDefinition}` and **the key is the id sent to the provider**. Renaming is therefore a pure config concern — no feature module needs to know. overclock folds explicit renames + allowlist into one policy in `src/core/policy.ts` (re-exported via `src/tools.ts`) and applies it in the single `mergeHooks` chokepoint.
 - Host built-ins observed on 1.18.4: `apply_patch bash edit glob grep invalid question read skill task todowrite webfetch websearch write`. A plugin tool registered under one of these **replaces** it in the final map (documented upstream behaviour, "a duplicate id overrides the built-in"). A name differing only by case (`Task` vs `task`) does not collide host-side — the host offers both — but a case-insensitive gateway sees one name twice.
-- opencode's ids are snake_case and disjoint from Claude Code's PascalCase set, so a proxy whitelisting Claude Code's tools leaves that whole namespace free for plugin tools. This is what `toolPreset: "claude-code"` borrows.
 - There is no per-request tool filter hook. `tool.definition` rewrites description/params of an existing tool but cannot rename or remove one, so withholding has to happen at registration.
 - Permission ids (`ctx.ask({permission})`) are independent of the wire id and are deliberately left unrenamed: they key the user's opencode permission config.
 
-## Customization points
+## OpenCode Customization Surface
 
-| CC                         | opencode                                     | Gap                     |
-| -------------------------- | -------------------------------------------- | ----------------------- |
-| CLAUDE.md + @imports       | AGENTS.md + CLAUDE.md fallbacks              | @import resolution      |
-| Skills                     | native + `.claude/skills` compat             | none                    |
-| Slash commands             | native commands                              | format translation      |
-| Subagents                  | native agents                                | format translation      |
-| Hooks (settings.json)      | not read; plugin-only                        | the shim's whole job    |
-| MCP (.mcp.json)            | `mcp` config; `.mcp.json` not read           | translation             |
-| Plugin bundles/marketplace | npm plugins + `config` hook                  | emulatable              |
-| Permission rules + modes   | native `permission` config                   | syntax translation      |
-| Output styles              | `experimental.chat.system.transform`         | emulatable              |
-| Statusline                 | TUI plugin slots                             | emulatable (was "skip") |
-| Memory                     | none built-in                                | backportable            |
-| Checkpoints                | native shadow-git snapshots + revert         | none                    |
-| Sandboxing                 | none                                         | hard gap                |
-| Custom tools (JS)          | plugin `tool:{}` + `{tool,tools}/*.ts` files | opencode win            |
-| TUI config                 | separate `tui.json` + themes dirs            | n/a                     |
+| Capability           | opencode native mechanism                      | Plugin / Extension role |
+| -------------------- | ---------------------------------------------- | ----------------------- |
+| Instructions         | `AGENTS.md`, `instructions` config             | hook injection          |
+| Skills               | native skills directory discovery              | custom tool exposure    |
+| Slash commands       | native `commands/**/*.md`                      | TUI command API         |
+| Subagents            | native `agents/**/*.md`                        | agent execution hooks   |
+| Event Interception   | plugin `event` hook                            | full event bus tap      |
+| MCP Integration      | native `mcp` config                            | dynamic server tool use |
+| Permission Rules     | native `permission` config                     | bash / tool gating      |
+| Output Styles        | `experimental.chat.system.transform`           | system prompt rewriting |
+| Statusline / Prompts | TUI plugin slots                               | custom slot rendering   |
+| Memory               | none built-in                                  | external plugins        |
+| Checkpoints          | native shadow-git snapshots + revert endpoints | native (core opencode)  |
+| Sandboxing           | codemode sandboxing (JS only)                  | native permissions      |
+| Custom Tools (JS/TS) | plugin `tool:{}` + `{tool,tools}/*.ts`         | full custom tools       |
+| TUI Configuration    | separate `tui.json` + themes dirs              | `tui` plugin surface    |
 
-Notes per row:
+Notes per capability:
 
-- **Instructions** — reads `AGENTS.md`; falls back to project `CLAUDE.md` **and** `~/.claude/CLAUDE.md`; nested AGENTS.md auto-attached when the read tool touches nearby files; `instructions` config accepts globs + URLs. **No @import resolution** (confirmed; `@file` works only in command templates/prompts). `{file:...}` / `{env:...}` substitution exists in JSON config only.
-- **Skills** — native discovery plus `.claude/skills/**`, `~/.claude/skills/**`, `.agents/skills/**` (kill switches: `OPENCODE_DISABLE_CLAUDE_CODE*`). `skills.paths[]` / `skills.urls[]` config. Skills auto-register as slash commands. Frontmatter: only `name` required; tolerates Claude-style invalid YAML.
-- **Commands** — `{command,commands}/**/*.md` in config dirs + `command` config. `$1..$N`, `$ARGUMENTS`, `` !`cmd` `` shell substitution, `@file`. **`.claude/commands` is NOT read.**
-- **Agents** — `{agent,agents}/**/*.md` + `agent` config; modes primary/subagent/all; built-ins build/plan/general/explore + hidden compaction/title/summary; `subagent_depth`. **`.claude/agents` is NOT read.**
-- **Hooks** — `.claude/settings.json` is not read and there is no `hooks` config field; event interception is plugin-only.
+- **Instructions** — reads `AGENTS.md`; nested AGENTS.md auto-attached when the read tool touches nearby files; `instructions` config accepts globs + URLs.
+- **Skills** — native discovery in project skills directories. Skills auto-register as slash commands. Frontmatter: `name` and `description`.
+- **Commands** — `{command,commands}/**/*.md` in config dirs + `command` config. Supports `$1..$N`, `$ARGUMENTS`, `` !`cmd` `` shell substitution, and `@file`.
+- **Agents** — `{agent,agents}/**/*.md` + `agent` config; modes primary/subagent/all; built-ins build/plan/general/explore + hidden compaction/title/summary; `subagent_depth`.
 - **Permissions** — ask/allow/deny with glob patterns, **last-match-wins**, per-agent overrides, bash tree-sitter command patterns (`git status *`), `OPENCODE_PERMISSION` env override, `--auto` flag.
-- **Memory** — nothing built in; `opencode-supermemory` exists in the ecosystem.
 - **Checkpoints** — shadow-git snapshots per worktree (`snapshot` config), session revert/unrevert endpoints, `/undo` `/redo`.
-- **Sandboxing** — none; codemode sandboxes model-authored JS only, bash is permission-prompt only.
+- **Sandboxing** — native codemode sandboxes model-authored JS only; bash calls rely on permission prompt.
 - **TUI config** — `tui.json` (theme, keybinds, attention/sounds, scroll, mouse); themes from `themes/*.json` in config dirs.
 
 opencode-only wins (exploit, no backport): params/headers hooks, history + system transforms, `tool.definition` rewrite, provider/auth hooks, JS custom tools, in-process SDK client, workspace adapters, TUI slots/routes/keymaps, `session.next.*` telemetry (cost/tokens per step), shadow-git snapshot API, v2 aisdk hook (wrap the LanguageModel itself).

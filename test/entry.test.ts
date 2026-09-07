@@ -20,13 +20,12 @@ describe("Overclock entry", () => {
     const tools = Object.keys(hooks.tool ?? {})
     expect(tools).toContain("task_run")
     expect(tools).toContain("schedule_create")
-    expect(tools).not.toContain("bash_unsandboxed") // sandbox off by default
   })
 
   test("degraded client (SDK drift) -> dependent features skipped, plugin survives", async () => {
     const hooks = await Overclock(ctx({ session: {} }))
-    // only modules with no `requires` (usage) survive a bare client
-    expect(Object.keys(hooks.tool ?? {})).toEqual(["usage_report"])
+    // modules with no requires (usage, buddy, truncator) survive a bare client and register no tools
+    expect(Object.keys(hooks.tool ?? {})).toEqual([])
   })
 
   test("dispose runs clean on capable client", async () => {
@@ -34,26 +33,25 @@ describe("Overclock entry", () => {
     await hooks.dispose?.()
   })
 
-  test("invalid overclock.json warns but still loads every feature", async () => {
-    const directory = dir()
-    await Bun.write(
-      `${directory}/.opencode/overclock.json`,
-      JSON.stringify({ featurez: {}, features: { tasks: { killOnExist: true }, taskz: false } }),
-    )
-    const warnings: string[] = []
-    const warn = console.warn
-    console.warn = (m: unknown) => void warnings.push(String(m))
-    try {
-      const hooks = await Overclock({ ...ctx(capableClient), directory } as never)
-      // config is garbage, but nothing is disabled by it -- defaults apply
-      expect(Object.keys(hooks.tool ?? {})).toContain("task_run")
-    } finally {
-      console.warn = warn
-    }
-    const joined = warnings.join("\n")
-    expect(joined).toMatch(/killOnExit/) // did-you-mean for the typo'd option
-    expect(joined).toMatch(/featurez/) // unknown top-level key
-    expect(joined).toMatch(/taskz/) // unknown feature name
+  test("feature options toggle modules directly", async () => {
+    // Disable tasks
+    const disabledHooks = await Overclock(ctx(capableClient), { tasks: false })
+    expect(Object.keys(disabledHooks.tool ?? {})).not.toContain("task_run")
+
+    // Disable sched
+    const schedDisabledHooks = await Overclock(ctx(capableClient), { sched: false })
+    expect(Object.keys(schedDisabledHooks.tool ?? {})).not.toContain("schedule_create")
+
+    // Nested features option also works
+    const nestedHooks = await Overclock(ctx(capableClient), { features: { tasks: false } })
+    expect(Object.keys(nestedHooks.tool ?? {})).not.toContain("task_run")
+  })
+
+  test("toolNames option remaps tools", async () => {
+    const hooks = await Overclock(ctx(capableClient), { toolNames: { task_run: "custom_run" } })
+    const tools = Object.keys(hooks.tool ?? {})
+    expect(tools).toContain("custom_run")
+    expect(tools).not.toContain("task_run")
   })
 
   test("first run reports the capabilities it added, once", async () => {

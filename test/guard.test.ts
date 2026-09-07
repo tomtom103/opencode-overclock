@@ -7,6 +7,9 @@ import {
   guard,
   matchHook,
   parseHooks,
+  checkEditFailure,
+  EDIT_RECOVERY_HINT,
+  GUARD_RECIPES,
   type GuardHook,
 } from "../src/features/guard.ts"
 
@@ -533,5 +536,43 @@ describe("guard module", () => {
     const output = { title: "t", output: "orig", metadata: {} }
     await after({ tool: "bash", sessionID: "s1", callID: "c1", args: {} }, output)
     expect(output.output).toBe("orig")
+  })
+
+  test("appends edit recovery hint on edit mismatch failures", async () => {
+    const result = await guard.init(
+      fakeCtx(),
+      {
+        editRecovery: true,
+      },
+      shared(),
+    )
+    const after = result["tool.execute.after"]!
+    const output = { title: "Edit", output: "Error: oldString not found in file", metadata: {} }
+    await after({ tool: "edit", sessionID: "s1", callID: "c1", args: {} }, output)
+    expect(output.output).toContain("oldString not found in file")
+    expect(output.output).toContain("[edit recovery hint]")
+    expect(output.output).toContain("inspect the latest file state")
+  })
+
+  test("loads built-in recipes when specified", async () => {
+    const result = await guard.init(
+      fakeCtx(),
+      {
+        recipes: ["tsc", "cargo"],
+      },
+      shared(),
+    )
+    expect(result["tool.execute.after"]).toBeDefined()
+    await result.dispose?.()
+  })
+
+  test("checkEditFailure returns hint only for edit errors", () => {
+    expect(checkEditFailure("edit", "oldString not found in content")).toBe(EDIT_RECOVERY_HINT)
+    expect(checkEditFailure("edit", "Found multiple matches for oldString")).toBe(EDIT_RECOVERY_HINT)
+    expect(checkEditFailure("edit", "oldString and newString must be different")).toBe(
+      EDIT_RECOVERY_HINT,
+    )
+    expect(checkEditFailure("edit", "File modified successfully")).toBeNull()
+    expect(checkEditFailure("write", "oldString not found")).toBeNull()
   })
 })

@@ -1,7 +1,7 @@
 {
   "name": "opencode-overclock",
   "version": "0.3.0",
-  "description": "Power-ups for opencode: background tasks, scheduling, sandboxed bash, tool hooks, usage telemetry, checkpoints. Modular, toggleable.",
+  "description": "Power-ups for opencode: background tasks, cron scheduling, quality-gate hooks, usage telemetry, and companion. Modular, toggleable.",
   "type": "module",
   "repository": {
     "type": "git",

@@ -4,9 +4,10 @@ import {
   formatSchedulesSummary,
   formatTasksSummary,
   formatUsageSummary,
-  type ScheduleMirrorEntry,
+  isBuddyEnabled,
+  type ScheduleEntryView,
   type TaskMirrorEntry,
-  type UsageStateShape,
+  type UsageStateView,
 } from "../src/tui.ts"
 
 describe("formatTasksSummary", () => {
@@ -45,13 +46,13 @@ describe("formatUsageSummary", () => {
   })
 
   test("no bucket for today", () => {
-    const state: UsageStateShape = { days: {} }
+    const state: UsageStateView = { days: {} }
     expect(formatUsageSummary(state, Date.now())).toBe("no usage today")
   })
 
   test("formats today's cost/tokens/messages", () => {
     const now = new Date(2026, 6, 28, 12, 0).getTime()
-    const state: UsageStateShape = {
+    const state: UsageStateView = {
       days: {
         [dayKey(now)]: {
           cost: 1.23456,
@@ -75,12 +76,12 @@ describe("formatSchedulesSummary", () => {
   })
 
   test("lists id + spec, singular/plural count", () => {
-    const one: ScheduleMirrorEntry[] = [{ id: "s-1", spec: "5m", target: "current" }]
+    const one: ScheduleEntryView[] = [{ id: "s-1", spec: "5m" }]
     expect(formatSchedulesSummary(one)).toBe("1 schedule: s-1 (5m)")
 
-    const many: ScheduleMirrorEntry[] = [
-      { id: "s-1", spec: "5m", target: "current" },
-      { id: "s-2", spec: "0 9 * * *", target: "new-session" },
+    const many: ScheduleEntryView[] = [
+      { id: "s-1", spec: "5m" },
+      { id: "s-2", spec: "0 9 * * *" },
     ]
     expect(formatSchedulesSummary(many)).toBe("2 schedules: s-1 (5m), s-2 (0 9 * * *)")
   })
@@ -90,5 +91,21 @@ describe("dayKey", () => {
   test("formats local YYYY-MM-DD", () => {
     const ms = new Date(2026, 6, 28, 15, 30).getTime() // month is 0-indexed: July
     expect(dayKey(ms)).toBe("2026-07-28")
+  })
+})
+
+describe("isBuddyEnabled", () => {
+  test("defaults to true", () => {
+    expect(isBuddyEnabled(undefined)).toBe(true)
+    expect(isBuddyEnabled({})).toBe(true)
+  })
+
+  test("false disables buddy", () => {
+    expect(isBuddyEnabled({ buddy: false })).toBe(false)
+    expect(isBuddyEnabled({ features: { buddy: false } } as any)).toBe(false)
+  })
+
+  test("true keeps buddy enabled", () => {
+    expect(isBuddyEnabled({ buddy: true })).toBe(true)
   })
 })

@@ -1,10 +1,12 @@
 import type { FeatureModule } from "../types.ts"
 import { inject, toast } from "../lib/inject.ts"
+import { execBash } from "../lib/exec.ts"
 
 export interface GuardHook {
   name: string
   tools: string[]
   pathFilter?: string
+  glob?: Bun.Glob
   run: string
   mode: "inject" | "append"
   debounceMs: number
@@ -12,6 +14,102 @@ export interface GuardHook {
   onSuccess: "silent" | "notify"
   /** inject mode: give up deferring past a busy session after this long, and report anyway. */
   maxDeferMs: number
+}
+
+export const EDIT_ERROR_PATTERNS = [
+  "oldstring and newstring must be different",
+  "oldstring not found",
+  "found multiple matches for oldstring",
+]
+
+export const EDIT_RECOVERY_HINT =
+  "\n\n[edit recovery hint]\nThe edit failed due to a content mismatch. Use the `read` tool to inspect the latest file state around the target lines before retrying the edit."
+
+export function checkEditFailure(tool: string, outputText: string): string | null {
+  if (tool.toLowerCase() !== "edit") return null
+  const lower = outputText.toLowerCase()
+  if (EDIT_ERROR_PATTERNS.some((p) => lower.includes(p))) {
+    return EDIT_RECOVERY_HINT
+  }
+  return null
+}
+
+export const GUARD_RECIPES: Record<string, Omit<GuardHook, "glob">> = {
+  tsc: {
+    name: "tsc",
+    tools: ["edit", "write"],
+    pathFilter: "**/*.{ts,tsx}",
+    run: "bun x tsc --noEmit || npx tsc --noEmit",
+    mode: "inject",
+    debounceMs: 2000,
+    timeoutMs: 60000,
+    onSuccess: "silent",
+    maxDeferMs: 300000,
+  },
+  eslint: {
+    name: "eslint",
+    tools: ["edit", "write"],
+    pathFilter: "**/*.{js,jsx,ts,tsx}",
+    run: "bun x eslint . || npx eslint .",
+    mode: "inject",
+    debounceMs: 2000,
+    timeoutMs: 60000,
+    onSuccess: "silent",
+    maxDeferMs: 300000,
+  },
+  ruff: {
+    name: "ruff",
+    tools: ["edit", "write"],
+    pathFilter: "**/*.py",
+    run: "ruff check .",
+    mode: "inject",
+    debounceMs: 2000,
+    timeoutMs: 60000,
+    onSuccess: "silent",
+    maxDeferMs: 300000,
+  },
+  cargo: {
+    name: "cargo",
+    tools: ["edit", "write"],
+    pathFilter: "**/*.rs",
+    run: "cargo check",
+    mode: "inject",
+    debounceMs: 2000,
+    timeoutMs: 60000,
+    onSuccess: "silent",
+    maxDeferMs: 300000,
+  },
+  go: {
+    name: "go",
+    tools: ["edit", "write"],
+    pathFilter: "**/*.go",
+    run: "go test ./...",
+    mode: "inject",
+    debounceMs: 2000,
+    timeoutMs: 60000,
+    onSuccess: "silent",
+    maxDeferMs: 300000,
+  },
+}
+
+export async function detectRecipes(directory: string): Promise<GuardHook[]> {
+  const detected: GuardHook[] = []
+  if (await Bun.file(`${directory}/tsconfig.json`).exists()) {
+    detected.push({ ...GUARD_RECIPES.tsc, glob: new Bun.Glob("**/*.{ts,tsx}") })
+  }
+  if (await Bun.file(`${directory}/Cargo.toml`).exists()) {
+    detected.push({ ...GUARD_RECIPES.cargo, glob: new Bun.Glob("**/*.rs") })
+  }
+  if (
+    (await Bun.file(`${directory}/pyproject.toml`).exists()) ||
+    (await Bun.file(`${directory}/ruff.toml`).exists())
+  ) {
+    detected.push({ ...GUARD_RECIPES.ruff, glob: new Bun.Glob("**/*.py") })
+  }
+  if (await Bun.file(`${directory}/go.mod`).exists()) {
+    detected.push({ ...GUARD_RECIPES.go, glob: new Bun.Glob("**/*.go") })
+  }
+  return detected
 }
 
 /** options.hooks -> validated GuardHook[]. Invalid entries -> console.warn, skipped, never throw. */
@@ -26,10 +124,12 @@ export function parseHooks(raw: unknown): GuardHook[] {
       console.warn(`[overclock] guard: skipping invalid hook config: ${JSON.stringify(entry)}`)
       continue
     }
+    const pathFilter = typeof e.pathFilter === "string" ? e.pathFilter : undefined
     hooks.push({
       name: e.name,
       tools: e.tools as string[],
-      pathFilter: typeof e.pathFilter === "string" ? e.pathFilter : undefined,
+      pathFilter,
+      glob: pathFilter ? new Bun.Glob(pathFilter) : undefined,
       run: e.run,
       mode: e.mode === "append" ? "append" : "inject",
       debounceMs: typeof e.debounceMs === "number" ? e.debounceMs : 2000,
@@ -41,12 +141,22 @@ export function parseHooks(raw: unknown): GuardHook[] {
   return hooks
 }
 
-/** tools: exact match. pathFilter set + no filePath -> no match. */
-export function matchHook(hook: GuardHook, toolName: string, filePath: string | undefined): boolean {
-  if (!hook.tools.includes(toolName)) return false
+/** tools: exact match or mapped name. pathFilter set + no filePath -> no match. */
+export function matchHook(
+  hook: GuardHook,
+  toolName: string,
+  filePath: string | undefined,
+  resolveTool?: (name: string) => string,
+): boolean {
+  const matches = hook.tools.some((t) => {
+    if (t === toolName) return true
+    if (resolveTool && resolveTool(t) === toolName) return true
+    return false
+  })
+  if (!matches) return false
   if (!hook.pathFilter) return true
   if (typeof filePath !== "string") return false
-  return new Bun.Glob(hook.pathFilter).match(filePath)
+  return (hook.glob ?? new Bun.Glob(hook.pathFilter)).match(filePath)
 }
 
 /** `[guard "<name>" failed (exit <code>)]` + last 40 lines of combined stdout+stderr. */
@@ -69,16 +179,7 @@ async function runCommand(
   env: Record<string, string | undefined>,
   register?: (proc: Bun.Subprocess) => void,
 ): Promise<{ code: number | null; combined: string }> {
-  const proc = Bun.spawn(["bash", "-c", hook.run], { cwd, env, stdout: "pipe", stderr: "pipe" })
-  register?.(proc)
-  const killTimer = setTimeout(() => proc.kill("SIGTERM"), hook.timeoutMs)
-  const [out, err, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  clearTimeout(killTimer)
-  return { code, combined: out + err }
+  return execBash(hook.run, { cwd, env, timeoutMs: hook.timeoutMs, onSpawn: register })
 }
 
 interface HookState {
@@ -200,7 +301,17 @@ export function createGuardRunner(deps: GuardRunnerDeps): GuardRunner {
   function dispose(): void {
     for (const s of states.values()) {
       if (s.timer) clearTimeout(s.timer)
-      for (const p of s.procs) p.kill("SIGTERM")
+      for (const p of s.procs) {
+        try {
+          p.kill("SIGTERM")
+          const hard = setTimeout(() => {
+            try {
+              p.kill("SIGKILL")
+            } catch {}
+          }, 1000)
+          hard.unref?.()
+        } catch {}
+      }
     }
   }
 
@@ -218,7 +329,6 @@ export function createGuardRunner(deps: GuardRunnerDeps): GuardRunner {
 export const guard: FeatureModule = {
   name: "guard",
   tools: [],
-  options: { hooks: "array" },
   defaultEnabled: true,
   requires: ["session.promptAsync", "session.messages"],
   async init(ctx, options, shared) {
@@ -226,29 +336,57 @@ export const guard: FeatureModule = {
       console.warn(`[overclock] guard: options.hooks must be an array, got ${typeof options.hooks}`)
     }
     const hooks = parseHooks(options.hooks)
-    if (hooks.length === 0) return {}
+    if (Array.isArray(options.recipes)) {
+      for (const r of options.recipes) {
+        if (typeof r === "string" && GUARD_RECIPES[r]) {
+          const recipe = GUARD_RECIPES[r]
+          hooks.push({
+            ...recipe,
+            glob: recipe.pathFilter ? new Bun.Glob(recipe.pathFilter) : undefined,
+          })
+        }
+      }
+    }
+    if (options.auto === true) {
+      const autoHooks = await detectRecipes(ctx.directory)
+      hooks.push(...autoHooks)
+    }
 
-    const runner = createGuardRunner({
-      cwd: ctx.directory,
-      onInject: async (sessionID, payload) => {
-        await inject(ctx.client, sessionID, payload)
-      },
-      onNotify: async (hookName) => {
-        await toast(ctx.client, `guard "${hookName}" passed`, "success")
-      },
-      isBusy: (sessionID) => shared.busy.isBusy(sessionID),
-    })
+    const editRecovery =
+      options.editRecovery === true || (hooks.length > 0 && options.editRecovery !== false)
+    if (hooks.length === 0 && !editRecovery) return {}
+
+    const runner =
+      hooks.length > 0
+        ? createGuardRunner({
+            cwd: ctx.directory,
+            onInject: async (sessionID, payload) => {
+              await inject(ctx.client, sessionID, payload)
+            },
+            onNotify: async (hookName) => {
+              await toast(ctx.client, `guard "${hookName}" passed`, "success")
+            },
+            isBusy: (sessionID) => shared.busy.isBusy(sessionID),
+          })
+        : undefined
 
     return {
       dispose: async () => {
-        runner.dispose()
+        runner?.dispose()
       },
       "tool.execute.after": async (input, output) => {
+        if (editRecovery && typeof output.output === "string") {
+          const hint = checkEditFailure(input.tool, output.output)
+          if (hint) output.output += hint
+        }
+
+        if (!runner || hooks.length === 0) return
+
         const args = input.args as Record<string, unknown> | undefined
         const filePath = typeof args?.filePath === "string" ? args.filePath : undefined
 
         for (const hook of hooks) {
-          if (!matchHook(hook, input.tool, filePath)) continue
+          if (!matchHook(hook, input.tool, filePath, shared?.toolName)) continue
           if (hook.mode === "append") {
             const payload = await runner.runAppend(hook, input.tool, filePath)
             if (payload && typeof output.output === "string") output.output += payload

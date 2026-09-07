@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "opencode-cc-backports",
+      "name": "opencode-overclock",
       "dependencies": {
         "@opencode-ai/plugin": "1.18.9",
         "croner": "^10.0.1",

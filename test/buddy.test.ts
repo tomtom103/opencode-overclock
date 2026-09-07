@@ -1,6 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import { mulberry32, rollCompanion, describeCompanion, migrateSpecies } from "../src/buddy/companion.ts"
-import { SPECIES, type Companion, type Species } from "../src/buddy/types.ts"
+import {
+  mulberry32,
+  rollCompanion,
+  describeCompanion,
+  migrateSpecies,
+  pickReaction,
+  createReactionGate,
+  cycleSpecies,
+  switchSpecies,
+  speciesDescription,
+  SPECIES_DESCRIPTIONS,
+  SPECIES,
+  type Companion,
+  type Species,
+  type ReactionKind,
+} from "../src/buddy/companion.ts"
 import {
   spriteFrame,
   withBubble,
@@ -9,7 +23,8 @@ import {
   SPRITE_MAX_HEIGHT,
   type SpriteState,
 } from "../src/buddy/sprites.ts"
-import { pickReaction, createReactionGate, type ReactionKind } from "../src/buddy/reactions.ts"
+import { registerBuddy } from "../src/buddy/tui.ts"
+import type { Ui } from "../src/lib/ui.ts"
 
 const STATES: SpriteState[] = ["idle", "pet", "alarmed", "curious", "sleep"]
 const KINDS: ReactionKind[] = ["done", "error", "permission", "question", "pet"]
@@ -197,5 +212,275 @@ describe("createReactionGate", () => {
     expect(gate.tryFire(10_500)).toBe(false)
     expect(gate.tryFire(10_999)).toBe(false)
     expect(gate.tryFire(11_000)).toBe(true)
+  })
+})
+
+describe("switchSpecies", () => {
+  const companion: Companion = {
+    species: "cat",
+    rarity: "rare",
+    name: "Pixel",
+    stats: { patience: 5, chaos: 2, wisdom: 8, snark: 3 },
+    hatchedAt: 500,
+  }
+
+  test("changes species and preserves all other companion fields", () => {
+    const switched = switchSpecies(companion, "penguin")
+    expect(switched.species).toBe("penguin")
+    expect(switched.name).toBe("Pixel")
+    expect(switched.rarity).toBe("rare")
+    expect(switched.stats).toEqual(companion.stats)
+    expect(switched.hatchedAt).toBe(500)
+  })
+
+  test("returns original companion if invalid species is passed", () => {
+    const invalid = switchSpecies(companion, "dragon" as any)
+    expect(invalid).toBe(companion)
+  })
+})
+
+describe("cycleSpecies", () => {
+  test("advances through all species in order and wraps around", () => {
+    let current: Species = SPECIES[0]
+    for (let i = 1; i < SPECIES.length; i++) {
+      current = cycleSpecies(current)
+      expect(current).toBe(SPECIES[i])
+    }
+    // wrapping from last to first
+    current = cycleSpecies(current)
+    expect(current).toBe(SPECIES[0])
+  })
+
+  test("unknown species defaults to first species", () => {
+    expect(cycleSpecies("unicorn" as any)).toBe(SPECIES[0])
+  })
+})
+
+describe("speciesDescription", () => {
+  test("provides descriptions for all species", () => {
+    for (const species of SPECIES) {
+      expect(SPECIES_DESCRIPTIONS[species]).toBeDefined()
+      expect(speciesDescription(species)).toBe(SPECIES_DESCRIPTIONS[species])
+    }
+  })
+
+  test("appends (current) when isCurrent is true", () => {
+    expect(speciesDescription("cat", true)).toBe(`${SPECIES_DESCRIPTIONS.cat} (current)`)
+    expect(speciesDescription("cat", false)).toBe(SPECIES_DESCRIPTIONS.cat)
+  })
+})
+
+describe("registerBuddy lifecycle and commands", () => {
+  function makeMockUi(initialCompanion?: Companion, rendererWidth = 120) {
+    const store = new Map<string, unknown>()
+    if (initialCompanion) store.set("buddy.companion", initialCompanion)
+    const toasts: string[] = []
+    const commands: Array<{
+      title: string
+      slash?: { name: string; aliases?: string[] }
+      run: (dialog?: unknown) => void | Promise<void>
+    }> = []
+    const intervals: Array<() => void> = []
+    const slotRenders: Record<string, (ctx: any) => any> = {}
+    let dialogRender: (() => any) | undefined
+    let dialogCleared = false
+
+    const fakeDialog = {
+      replace: (render: () => any) => {
+        dialogRender = render
+      },
+      clear: () => {
+        dialogCleared = true
+      },
+    }
+
+    const ui = {
+      enableJsx: async () => {},
+      node: (type: any, props: any) => ({ type, props }),
+      api: {
+        kv: {
+          get: (key: string, fallback: any) => store.get(key) ?? fallback,
+          set: (key: string, val: any) => store.set(key, val),
+        },
+        renderer: { width: rendererWidth },
+        theme: {
+          current: {
+            accent: "accent",
+            info: "info",
+            success: "success",
+            textMuted: "muted",
+          },
+        },
+        ui: {
+          DialogSelect: (props: any) => ({ type: "DialogSelect", props }),
+          dialog: fakeDialog,
+        },
+        command: {
+          register: () => () => {},
+        },
+      },
+      toast: (msg: string) => toasts.push(msg),
+      every: (_ms: number, fn: () => void) => intervals.push(fn),
+      on: () => () => {},
+      slots: (map: any) => {
+        Object.assign(slotRenders, map)
+      },
+      command: (cmd: any) => {
+        commands.push({
+          title: cmd.title,
+          slash: cmd.slash ? { name: cmd.slash, aliases: cmd.aliases } : undefined,
+          run: cmd.run,
+        })
+      },
+    } as unknown as Ui
+
+    return {
+      ui,
+      store,
+      toasts,
+      commands,
+      intervals,
+      slotRenders,
+      fakeDialog,
+      getDialogRender: () => dialogRender,
+      isDialogCleared: () => dialogCleared,
+    }
+  }
+
+  test("hatches buddy on first run and registers commands", async () => {
+    const mock = makeMockUi()
+    await registerBuddy(mock.ui)
+
+    const hatched = mock.store.get("buddy.companion") as Companion
+    expect(hatched).toBeDefined()
+    expect(SPECIES).toContain(hatched.species)
+    expect(mock.toasts).toHaveLength(1)
+    expect(mock.toasts[0]).toContain("a buddy hatched")
+
+    const slashNames = mock.commands.map((c) => c.slash?.name)
+    expect(slashNames).toContain("oc-buddy")
+    expect(slashNames).toContain("oc-buddy-switch")
+    expect(slashNames).toContain("oc-buddy-cycle")
+  })
+
+  test("oc-buddy command pets buddy and shows toast", async () => {
+    const comp: Companion = {
+      species: "dog",
+      rarity: "uncommon",
+      name: "Biscuit",
+      stats: { patience: 4, chaos: 4, wisdom: 4, snark: 4 },
+      hatchedAt: 100,
+    }
+    const mock = makeMockUi(comp)
+    await registerBuddy(mock.ui)
+
+    const petCmd = mock.commands.find((c) => c.slash?.name === "oc-buddy")!
+    await petCmd.run()
+
+    expect(mock.toasts).toContain(describeCompanion(comp))
+  })
+
+  test("oc-buddy-cycle advances through species and updates mounted nodes", async () => {
+    const comp: Companion = {
+      species: "cat",
+      rarity: "common",
+      name: "Mochi",
+      stats: { patience: 6, chaos: 3, wisdom: 5, snark: 2 },
+      hatchedAt: 100,
+    }
+    const mock = makeMockUi(comp)
+    await registerBuddy(mock.ui)
+
+    // Mount a sprite node
+    const slotVNode = mock.slotRenders.home_prompt_right({
+      theme: { current: (mock.ui.api as any).theme.current },
+    }) as any
+    const mockNode = { content: "", visible: true, height: 0, fg: "" }
+    slotVNode.props.ref(mockNode)
+
+    const cycleCmd = mock.commands.find((c) => c.slash?.name === "oc-buddy-cycle")!
+    await cycleCmd.run()
+
+    const updated = mock.store.get("buddy.companion") as Companion
+    expect(updated.species).toBe("dog")
+    expect(mockNode.height).toBe(spriteHeight("dog"))
+    expect(mockNode.content.length).toBeGreaterThan(0)
+    expect(mock.toasts.some((t) => t.includes("switched to dog"))).toBe(true)
+  })
+
+  test("oc-buddy-switch opens dialog when dialog stack is available", async () => {
+    const comp: Companion = {
+      species: "owl",
+      rarity: "rare",
+      name: "Hoot",
+      stats: { patience: 9, chaos: 1, wisdom: 10, snark: 5 },
+      hatchedAt: 200,
+    }
+    const mock = makeMockUi(comp)
+    await registerBuddy(mock.ui)
+
+    const switchCmd = mock.commands.find((c) => c.slash?.name === "oc-buddy-switch")!
+    await switchCmd.run(mock.fakeDialog)
+
+    const dialogRender = mock.getDialogRender()
+    expect(dialogRender).toBeDefined()
+    const dialogElement = dialogRender!() as any
+    expect(dialogElement.props.title).toBe("Switch Buddy")
+    expect(dialogElement.props.options.length).toBe(SPECIES.length + 1) // all species + random
+
+    // Select ghost
+    const ghostOption = dialogElement.props.options.find((o: any) => o.value === "ghost")
+    ghostOption.onSelect()
+
+    expect(mock.isDialogCleared()).toBe(true)
+    const current = mock.store.get("buddy.companion") as Companion
+    expect(current.species).toBe("ghost")
+    expect(current.name).toBe("Hoot") // Preserves name
+    expect(mock.toasts.some((t) => t.includes("switched to ghost"))).toBe(true)
+  })
+
+  test("oc-buddy-switch random roll rolls a new buddy", async () => {
+    const comp: Companion = {
+      species: "bat",
+      rarity: "common",
+      name: "Fang",
+      stats: { patience: 1, chaos: 10, wisdom: 2, snark: 8 },
+      hatchedAt: 300,
+    }
+    const mock = makeMockUi(comp)
+    await registerBuddy(mock.ui)
+
+    const switchCmd = mock.commands.find((c) => c.slash?.name === "oc-buddy-switch")!
+    await switchCmd.run(mock.fakeDialog)
+
+    const dialogElement = mock.getDialogRender()!() as any
+    const randomOption = dialogElement.props.options.find((o: any) => o.value === "random")
+    randomOption.onSelect()
+
+    expect(mock.isDialogCleared()).toBe(true)
+    const current = mock.store.get("buddy.companion") as Companion
+    expect(current).toBeDefined()
+    expect(mock.toasts.some((t) => t.includes("a new buddy hatched"))).toBe(true)
+  })
+
+  test("oc-buddy-switch falls back to cycling when dialog is unavailable", async () => {
+    const comp: Companion = {
+      species: "bunny",
+      rarity: "legendary",
+      name: "Thumper",
+      stats: { patience: 7, chaos: 7, wisdom: 7, snark: 7 },
+      hatchedAt: 400,
+    }
+    const mock = makeMockUi(comp)
+    // Remove dialog
+    delete (mock.ui.api.ui as any).dialog
+    await registerBuddy(mock.ui)
+
+    const switchCmd = mock.commands.find((c) => c.slash?.name === "oc-buddy-switch")!
+    await switchCmd.run(undefined)
+
+    const updated = mock.store.get("buddy.companion") as Companion
+    expect(updated.species).toBe("owl") // bunny -> owl
+    expect(mock.toasts.some((t) => t.includes("switched to owl"))).toBe(true)
   })
 })

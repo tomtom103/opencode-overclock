@@ -1,85 +1,114 @@
-import type { Hooks, Plugin } from "@opencode-ai/plugin"
+import type { Hooks } from "@opencode-ai/plugin"
 import { features } from "./features/index.ts"
-import { loadConfig } from "./config.ts"
-import { mergeHooks } from "./merge.ts"
+import { mergeHooks } from "./core/lifecycle.ts"
+import { resolveToolPolicy } from "./core/policy.ts"
+import { summarise } from "./core/summary.ts"
+import { createHybridPlugin, type HybridPlugin } from "./core/bridge.ts"
+import type { FeatureModule, OverclockOptions, SharedDeps } from "./core/types.ts"
 import { missingSurfaces } from "./lib/probe.ts"
 import { toast } from "./lib/inject.ts"
 import { firstRun } from "./lib/state.ts"
-import { validateConfig, summarise } from "./validate.ts"
 import { createBusyTracker } from "./lib/busy.ts"
-import { EMPTY_POLICY, resolveToolPolicy, type ToolPolicy } from "./tools.ts"
-import type { FeatureModule, SharedDeps } from "./types.ts"
+import { createV2Host } from "./v2/host.ts"
+
+function featureOptions(
+  options: OverclockOptions,
+  feature: FeatureModule,
+): Record<string, unknown> | null {
+  const setting = options[feature.name] ?? options.features?.[feature.name] ?? feature.defaultEnabled
+  if (setting === false) return null
+  return typeof setting === "object" && setting !== null ? (setting as Record<string, unknown>) : {}
+}
 
 /**
- * Entry. Load config -> probe surfaces -> init enabled modules -> merge hooks.
- * Module crash or missing SDK surface (upstream drift) -> skip module, plugin survive.
+ * Entry. Read options -> probe surfaces -> init enabled modules -> merge hooks.
+ * Employs createHybridPlugin so the plugin is runnable on both V1 and V2 OpenCode harnesses.
  */
-export const Overclock: Plugin = async (ctx) => {
-  const config = await loadConfig(ctx.directory)
+export const Overclock: HybridPlugin<OverclockOptions> = createHybridPlugin<OverclockOptions>({
+  id: "overclock",
 
-  // Collected now, reported once the tool policy is known so a single pass covers both.
-  const issues = validateConfig(config, features)
+  /** V1 lifecycle: tools, execution interception, event bus hooks */
+  server: async (ctx, pluginOptions) => {
+    const options = (pluginOptions ?? {}) as OverclockOptions
+    const { policy, issues } = resolveToolPolicy(options, features)
 
-  // Resolved after the init loop, against the modules that actually loaded -- warning about a
-  // tool belonging to a disabled feature would be noise. Modules only call `toolName` at
-  // runtime (a hook or timer, long after init), so reading it through this binding is safe.
-  let policy: ToolPolicy = EMPTY_POLICY
-  const shared: SharedDeps = {
-    busy: createBusyTracker(),
-    toolName: (declared) => policy.rename[declared] ?? declared,
-  }
-  // First part, so the tracker is current before any module's own event hook reads it.
-  const parts: Partial<Hooks>[] = [{ event: async ({ event }) => shared.busy.onEvent(event) }]
-  const skipped: string[] = []
-  const enabled: FeatureModule[] = []
+    const shared: SharedDeps = {
+      busy: createBusyTracker(),
+      toolName: (declared) => policy.rename[declared] ?? declared,
+    }
+    const parts: Partial<Hooks>[] = [{ event: async ({ event }) => shared.busy.onEvent(event) }]
+    const skipped: string[] = []
+    const enabled: FeatureModule[] = []
 
-  for (const feature of features) {
-    const setting = config.features?.[feature.name] ?? feature.defaultEnabled
-    if (setting === false) continue
-    const missing = missingSurfaces(ctx.client, feature.requires ?? [])
-    if (missing.length) {
-      console.warn(
-        `[overclock] ${feature.name} disabled: client lacks ${missing.join(", ")} (upstream drift?)`,
+    for (const feature of features) {
+      const opts = featureOptions(options, feature)
+      if (opts === null) continue
+
+      const missing = missingSurfaces(ctx.client, feature.requires ?? [])
+      if (missing.length) {
+        console.warn(
+          `[overclock] ${feature.name} disabled: client lacks ${missing.join(", ")} (upstream drift?)`,
+        )
+        skipped.push(feature.name)
+        continue
+      }
+
+      try {
+        parts.push(await feature.init(ctx, opts, shared))
+        enabled.push(feature)
+      } catch (e) {
+        console.warn(`[overclock] feature ${feature.name} failed init: ${e}`)
+      }
+    }
+
+    if (Array.isArray(options.plugins) && options.plugins.length > 0) {
+      const v2Host = createV2Host(ctx, options)
+      const loadedV2 = await v2Host.loadPlugins(options.plugins)
+      if (loadedV2.length > 0) {
+        console.warn(`[overclock] loaded ${loadedV2.length} v2 plugin(s): ${loadedV2.join(", ")}`)
+      }
+      parts.push(v2Host.createHooks())
+    }
+
+    for (const issue of issues) {
+      console.warn(`[overclock] config: ${issue.path ? `${issue.path}: ` : ""}${issue.message}`)
+    }
+    if (issues.length) {
+      void toast(
+        ctx.client,
+        `overclock: ${issues.length} config issue${issues.length > 1 ? "s" : ""} (see logs)`,
+        "warning",
       )
-      skipped.push(feature.name)
-      continue
     }
-    const options = typeof setting === "object" ? setting : {}
-    try {
-      parts.push(await feature.init(ctx, options, shared))
-      enabled.push(feature)
-    } catch (e) {
-      console.warn(`[overclock] feature ${feature.name} failed init: ${e}`)
+
+    const summary = summarise(enabled, skipped, policy)
+    console.warn(`[overclock] ${summary}`)
+    if (await firstRun(ctx.directory)) {
+      void toast(ctx.client, `overclock active: ${summary}`, "info")
     }
-  }
 
-  const resolved = resolveToolPolicy(config, enabled)
-  policy = resolved.policy
-  issues.push(...resolved.issues)
+    if (skipped.length) {
+      void toast(ctx.client, `overclock: ${skipped.join(", ")} disabled (SDK drift)`, "warning")
+    }
+    return mergeHooks(parts, policy)
+  },
 
-  // A mistyped key is otherwise a silent no-op -- the feature runs with defaults and the
-  // user believes their setting took effect. Warn, never throw: bad config degrades to
-  // defaults rather than taking the plugin down.
-  for (const issue of issues) {
-    console.warn(`[overclock] config: ${issue.path ? `${issue.path}: ` : ""}${issue.message}`)
-  }
-  if (issues.length) {
-    void toast(
-      ctx.client,
-      `overclock: ${issues.length} config issue${issues.length > 1 ? "s" : ""} (see logs)`,
-      "warning",
-    )
-  }
+  /** V2 lifecycle: domain transforms (agents, commands, catalog, aisdk) */
+  setup: async (v2Context, pluginOptions) => {
+    const options = (pluginOptions ?? {}) as OverclockOptions
 
-  // Say what was added. This plugin grants the agent background shell execution and
-  // recurring scheduling; that should not be discovered by accident. Log every start
-  // (stderr, invisible unless you look), toast only on a project's first run.
-  console.warn(`[overclock] ${summarise(enabled, skipped, policy)}`)
-  if (await firstRun(ctx.directory)) {
-    void toast(ctx.client, `overclock active: ${summarise(enabled, skipped, policy)}`, "info")
-  }
+    for (const feature of features) {
+      if (!feature.setup) continue
+      const opts = featureOptions(options, feature)
+      if (opts === null) continue
 
-  if (skipped.length)
-    void toast(ctx.client, `overclock: ${skipped.join(", ")} disabled (SDK drift)`, "warning")
-  return mergeHooks(parts, policy)
-}
+      try {
+        await feature.setup(v2Context, opts)
+      } catch (e) {
+        console.warn(`[overclock] feature ${feature.name} failed v2 setup: ${e}`)
+      }
+    }
+  },
+})
+
+export default Overclock

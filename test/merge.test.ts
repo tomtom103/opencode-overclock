@@ -78,6 +78,12 @@ describe("renameInText", () => {
       "task_run is fine",
     )
   })
+
+  test("single pass prevents cascading renames", () => {
+    expect(renameInText("run task_run now", { task_run: "task_exec", task_exec: "task_custom" })).toBe(
+      "run task_exec now",
+    )
+  })
 })
 
 describe("mergeHooks description rewriting", () => {

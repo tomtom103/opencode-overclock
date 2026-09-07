@@ -1,4 +1,4 @@
-import type { Species } from "./types.ts"
+import type { Species } from "./companion.ts"
 
 /**
  * Every frame is padded to exactly SPRITE_WIDTH columns so animation never
@@ -35,8 +35,8 @@ interface SpeciesArt {
   /**
    * Which of the two poses a tick shows. Per-species on purpose: alternating
    * every tick reads as a strobe, and it makes every species move alike. A cat
-   * flicks its tail rarely, a dog wags nonstop, a dragon's wingbeat is slow and
-   * held at the top, a ghost never quite lands.
+   * flicks its tail rarely, a dog wags nonstop, a bat's wingbeat flutters rapidly,
+   * a ghost never quite lands.
    */
   beat: (t: number) => 0 | 1
 }
@@ -148,7 +148,7 @@ export function withBubble(frame: string, bubble: string | undefined): string {
 /** Pure: render one frame. `tick` drives idle fidget + blink; other states are static. */
 export function spriteFrame(species: Species, state: SpriteState, tick: number): string {
   const art = ART[species]
-  const t = ((tick % 1000) + 1000) % 1000
+  const t = Math.max(0, tick)
   const body = art.idle[art.beat(t)]!
   const rest = art.idle[0]!
 
