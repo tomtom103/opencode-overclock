@@ -41,6 +41,20 @@ export function looksLikePrompt(tail: string): boolean {
   return PROMPT_PATTERNS.some((p) => p.test(lastLine))
 }
 
+export interface TasksOptions {
+  killOnExit?: boolean
+  stallDetection?: boolean
+  stallThresholdMs?: number
+  stallCheckIntervalMs?: number
+  stallTailBytes?: number
+  tmux?: boolean | string
+  tmuxTarget?: string
+  sanitizeEnv?: boolean
+  envAllowlist?: string[]
+  maxTasks?: number
+  [key: string]: unknown
+}
+
 export interface TaskRecord {
   id: string
   description: string
@@ -154,7 +168,8 @@ export function createTaskManager(opts: {
   stallThresholdMs?: number
   stallTailBytes?: number
   /** spawn a tmux split pane to tail task logs (only if TMUX is active) */
-  tmux?: boolean
+  tmux?: boolean | string
+  tmuxTarget?: string
   sanitizeEnv?: boolean
   envAllowlist?: string[]
   maxTasks?: number
@@ -247,7 +262,9 @@ export function createTaskManager(opts: {
     persistMirror()
     let panePromise: Promise<TmuxPane | null> | undefined
     if (opts.tmux) {
-      panePromise = spawnTaskPane(entry.logPath, entry.description)
+      const targetPane =
+        typeof opts.tmux === "string" ? opts.tmux : opts.tmuxTarget || process.env.TMUX_PANE
+      panePromise = spawnTaskPane(entry.logPath, entry.description, targetPane)
       panePromise.then((pane) => {
         if (pane) entry.tmuxPane = pane
       })
@@ -264,7 +281,7 @@ export function createTaskManager(opts: {
         opts.onStall,
       )
     }
-    proc.exited.then(async (code) => {
+    const onExitHandler = async (code: number | null) => {
       if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
       if (entry.stallTimer) clearInterval(entry.stallTimer)
       if (panePromise) {
@@ -282,7 +299,13 @@ export function createTaskManager(opts: {
         pruneFinishedTasks()
         persistMirror()
       }
-    })
+    }
+
+    try {
+      proc.exited.then(onExitHandler).catch(() => onExitHandler(proc.exitCode ?? 0))
+    } catch {
+      void onExitHandler(proc.exitCode ?? 0)
+    }
     return strip(entry)
   }
 
@@ -346,7 +369,11 @@ export const tasks: FeatureModule = {
     const manager = createTaskManager({
       logDir,
       mirrorPath: taskStore.path(ctx.directory),
-      tmux: options.tmux === true,
+      tmux:
+        typeof options.tmux === "string"
+          ? options.tmux
+          : options.tmux === true || (options.tmux !== false && typeof options.tmuxTarget === "string"),
+      tmuxTarget: typeof options.tmuxTarget === "string" ? options.tmuxTarget : undefined,
       sanitizeEnv: options.sanitizeEnv !== false,
       envAllowlist: Array.isArray(options.envAllowlist) ? (options.envAllowlist as string[]) : undefined,
       maxTasks: typeof options.maxTasks === "number" ? options.maxTasks : 100,

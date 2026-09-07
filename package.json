@@ -1,6 +1,6 @@
 {
   "name": "opencode-overclock",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Power-ups for opencode: background tasks, cron scheduling, quality-gate hooks, usage telemetry, and companion. Modular, toggleable.",
   "type": "module",
   "repository": {
@@ -41,6 +41,7 @@
   "dependencies": {
     "@opencode-ai/plugin": "1.18.9",
     "croner": "^10.0.1",
+    "playwright-core": "^1.63.0",
     "yaml": "^2.7.0"
   },
   "peerDependencies": {

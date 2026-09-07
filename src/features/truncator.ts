@@ -1,6 +1,14 @@
 import type { FeatureModule } from "../types.ts"
 
-export const DEFAULT_TRUNCATABLE_TOOLS = ["task_output", "bash", "grep", "glob", "webfetch"]
+export const DEFAULT_TRUNCATABLE_TOOLS = [
+  "task_output",
+  "bash",
+  "grep",
+  "glob",
+  "webfetch",
+  "browser",
+  "crawl",
+]
 
 export const DEFAULT_MAX_CHARS = 40_000
 export const DEFAULT_HEAD_LINES = 10

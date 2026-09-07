@@ -25,7 +25,8 @@ DO NOT speculate, theorize, or edit production code yet.
 Construct an automated command (unit test, curl, CLI invocation, or trace replay) that reliably triggers the failure.
 - **Deterministic:** Runs unattended and produces a clear pass/fail signal.
 - **Fast:** Executes in seconds.
-- **Flaky / Intermittent Defects:** Loop the trigger 50-100 times under load to raise the reproduction rate. A 40%-flake bug is debuggable; a 0.5% flake is not.
+- **Web & UI Defects:** Use \`browser\` (\`navigate\`, \`console\`) to capture live console logs, uncaught exceptions, and ActionTrace diagnostics.
+- **Flaky / Intermittent Defects:** Loop the trigger 50-100 times under load to raise the reproduction rate. Run long reproduction loops in the background using \`task_run\` with an explicit \`timeout\` to avoid turn-blocking.
 - **Inaccessible Environments:** If missing credentials or remote environments prevent local repro, do NOT guess. State what is missing and ask the user for a sanitized HAR trace, log dump, or temporary staging instrumentation.
 
 ### Phase 2: Reproduce & Minimise

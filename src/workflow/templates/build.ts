@@ -18,7 +18,7 @@ For each task on the frontier:
 1. **RED (Prove Capability Missing):**
    - Write a focused test at the declared public seam before touching implementation code.
    - Use an **independent test oracle**: never compute expected results with the same logic used in production code.
-   - Run the test suite: confirm the test fails for the expected reason (missing capability, not a syntax error).
+   - Run the test suite: confirm the test fails for the expected reason (missing capability, not a syntax error). Use \`bash\` for fast unit checks (<3s) or \`task_run\` for test watchers or long test runs (>5s).
    - *Prove-It Pattern:* If fixing a bug, the test MUST reproduce the reported defect before touching the fix.
 
 2. **GREEN (Minimal Implementation):**
@@ -31,7 +31,7 @@ For each task on the frontier:
    - Remove duplication, simplify names, and polish structure. Re-verify tests pass after every refactoring edit.
 
 4. **VERIFY:**
-   - Run project linters and typecheckers to confirm zero regressions.
+   - Run project linters and typecheckers to confirm zero regressions (or let Overclock's \`guard\` report on idle). For frontend/UI features, verify visual rendering with \`browser\` (\`navigate\`, \`screenshot\`).
 
 5. **UPDATE PLAN:**
    - Mark the completed task in \`tasks/plan.md\` and update \`todowrite\`.

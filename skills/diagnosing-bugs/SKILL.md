@@ -37,9 +37,9 @@ Before displaying commands, outputs, or captured logs:
 1. **Failing Unit / Integration Test:** At the seam reaching the bug.
 2. **Automated HTTP / Script Invocation:** `curl` or script against a local server.
 3. **CLI Invocation with Snapshot Diff:** Diffing output against known-good state.
-4. **Headless Browser Test:** Playwright or Puppeteer script asserting on DOM or network.
+4. **Headless Browser Test:** Use Overclock's native `browser` tool (`navigate`, `console`, `screenshot`) to capture live DOM state and ActionTrace console diagnostics.
 5. **Replayed Trace / Fixture:** Load a captured production payload or event in isolation.
-6. **Throwaway Minimal Harness:** Isolated script calling the subsystem directly.
+6. **Throwaway Minimal Harness:** Isolated script calling the subsystem directly. Run long looped reproductions via `task_run` with an explicit `timeout` to avoid locking the conversation turn.
 
 #### Non-Deterministic & Flaky Defects
 

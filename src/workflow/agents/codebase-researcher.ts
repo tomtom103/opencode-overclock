@@ -6,6 +6,7 @@ Investigation Protocol:
 1. Ground in Evidence:
    - Use \`glob\` and \`grep\` to locate relevant files, symbols, and patterns.
    - Use \`read\` to inspect surrounding context, interfaces, and test fixtures.
+   - For external framework docs or library references, use \`webfetch\` (mode: "distill" or "outline") or \`crawl\` (format: "digest") to extract clean Markdown without cluttering context.
    - Never speculate on how a subsystem works when you can verify it directly from source files.
 2. Trace the Seams:
    - Identify entry points, public API signatures, and event/data schemas.

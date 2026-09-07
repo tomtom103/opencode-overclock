@@ -91,6 +91,15 @@ describe("checkDangerousCommand", () => {
     expect(checkDangerousCommand("git checkout HEAD -- .", patterns)?.name).toBe("discard-all-worktree")
     expect(checkDangerousCommand("git checkout -f .", patterns)?.name).toBe("discard-all-worktree")
   })
+
+  test("does not suffer from ReDoS when matching repeated flags", () => {
+    const cmd = "git " + "-a ".repeat(40) + "status"
+    const start = performance.now()
+    const result = checkDangerousCommand(cmd, patterns)
+    const elapsed = performance.now() - start
+    expect(result).toBeNull()
+    expect(elapsed).toBeLessThan(50)
+  })
 })
 
 describe("resolvePatterns options", () => {

@@ -13,13 +13,20 @@ export function isInsideTmux(): boolean {
  * Uses `-d` to avoid stealing terminal focus.
  * Uses positional parameters to prevent shell injection via title formatting.
  */
-export async function spawnTaskPane(logPath: string, title?: string): Promise<TmuxPane | null> {
+export async function spawnTaskPane(
+  logPath: string,
+  title?: string,
+  target?: string,
+): Promise<TmuxPane | null> {
   if (!isInsideTmux()) return null
   try {
+    const targetId = target || process.env.TMUX_PANE
+    const targetArgs = targetId ? ["-t", targetId] : []
     const args = title
       ? [
           "tmux",
           "split-window",
+          ...targetArgs,
           "-d",
           "-P",
           "-F",
@@ -31,7 +38,7 @@ export async function spawnTaskPane(logPath: string, title?: string): Promise<Tm
           title,
           logPath,
         ]
-      : ["tmux", "split-window", "-d", "-P", "-F", "#{pane_id}", "tail", "-f", logPath]
+      : ["tmux", "split-window", ...targetArgs, "-d", "-P", "-F", "#{pane_id}", "tail", "-f", logPath]
 
     const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" })
     const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])

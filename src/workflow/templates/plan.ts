@@ -36,6 +36,7 @@ Create directory \`tasks/\` if needed, and write \`tasks/plan.md\`:
 ## Frontier (Ready to Execute)
 - [ ] **Task 1: [Short Title]**
   - **Seam:** \`test/seam.test.ts\`
+  - **Verification:** \`bash: bun test test/seam.test.ts\` (or \`task_run\` for watchers/builds >5s; \`browser\` for UI)
   - **Scope:** [Vertical slice description]
   - **Acceptance Criteria:** [Verifiable criteria]
   - **Blocked By:** None
@@ -43,6 +44,7 @@ Create directory \`tasks/\` if needed, and write \`tasks/plan.md\`:
 ## Sequence (Blocked)
 - [ ] **Task 2: [Short Title]**
   - **Seam:** \`test/api.test.ts\`
+  - **Verification:** \`bash: bun test test/api.test.ts\`
   - **Scope:** [Vertical slice description]
   - **Blocked By:** Task 1
 \`\`\`

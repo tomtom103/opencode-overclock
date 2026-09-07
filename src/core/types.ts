@@ -46,7 +46,8 @@ export interface TasksOptions {
   stallDetection?: boolean
   stallThresholdMs?: number
   stallCheckIntervalMs?: number
-  tmux?: boolean
+  tmux?: boolean | string
+  tmuxTarget?: string
   sanitizeEnv?: boolean
   envAllowlist?: string[]
   maxTasks?: number
@@ -118,6 +119,19 @@ export interface TruncatorOptions {
   [key: string]: unknown
 }
 
+export interface BrowserOptions {
+  enabled?: boolean
+  headless?: boolean
+  cdpEndpoint?: string
+  channel?: "chrome" | "msedge" | "chromium"
+  executablePath?: string
+  idleTimeoutMs?: number
+  navigationTimeoutMs?: number
+  overrideWebfetch?: boolean
+  artifactsDir?: string
+  [key: string]: unknown
+}
+
 /**
  * Accepted formats for declaring V2 plugins:
  * file path, npm package, tuple with options, or plugin object.
@@ -139,6 +153,7 @@ export interface OverclockOptions {
   workflow?: boolean | WorkflowOptions
   recovery?: boolean | RecoveryOptions
   truncator?: boolean | TruncatorOptions
+  browser?: boolean | BrowserOptions
   /** Legacy or grouped feature options: { features: { guard: ... } } */
   features?: Record<string, boolean | Record<string, unknown>>
   /** Model-visible tool ids: declared name -> replacement */

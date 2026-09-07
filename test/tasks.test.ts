@@ -1,4 +1,4 @@
-import { describe, expect, test, afterAll } from "bun:test"
+import { describe, expect, test, afterAll, spyOn } from "bun:test"
 import { tmpDir, cleanupTmp } from "./tmp.ts"
 import {
   createTaskManager,
@@ -258,5 +258,70 @@ describe("stall watchdog", () => {
     expect(exit1?.tail).not.toContain("no task")
     expect(exit2?.tail).toContain("output-t2")
     expect(exit2?.tail).not.toContain("no task")
+  })
+
+  test("spawns tmux pane with configured tmux / tmuxTarget", async () => {
+    const origTmux = process.env.TMUX
+    const origPane = process.env.TMUX_PANE
+    let spawnedArgs: string[][] = []
+
+    const origSpawn = Bun.spawn
+    const spawnSpy = spyOn(Bun, "spawn").mockImplementation((args: any, opts?: any) => {
+      if (Array.isArray(args) && args[0] === "tmux") {
+        spawnedArgs.push(args)
+        return {
+          stdout: new Response("%42\n").body,
+          stderr: new Response("").body,
+          exited: Promise.resolve(0),
+          exitCode: 0,
+        } as any
+      }
+      return origSpawn(args, opts)
+    })
+
+    try {
+      process.env.TMUX = "1"
+      process.env.TMUX_PANE = "%current"
+
+      // Case 1: tmux as a string target
+      spawnedArgs = []
+      const mgr1 = createTaskManager({
+        logDir: logDir(),
+        tmux: "%custom-target",
+      })
+      mgr1.run({ command: "true", description: "custom target test", cwd: "/tmp", sessionID: "s" })
+      await waitFor(async () => spawnedArgs.length > 0)
+      expect(spawnedArgs[0]).toContain("-t")
+      expect(spawnedArgs[0][spawnedArgs[0].indexOf("-t") + 1]).toBe("%custom-target")
+
+      // Case 2: tmux boolean + tmuxTarget
+      spawnedArgs = []
+      const mgr2 = createTaskManager({
+        logDir: logDir(),
+        tmux: true,
+        tmuxTarget: "%opt-target",
+      })
+      mgr2.run({ command: "true", description: "opt target test", cwd: "/tmp", sessionID: "s" })
+      await waitFor(async () => spawnedArgs.length > 0)
+      expect(spawnedArgs[0]).toContain("-t")
+      expect(spawnedArgs[0][spawnedArgs[0].indexOf("-t") + 1]).toBe("%opt-target")
+
+      // Case 3: tmux boolean without tmuxTarget -> falls back to TMUX_PANE
+      spawnedArgs = []
+      const mgr3 = createTaskManager({
+        logDir: logDir(),
+        tmux: true,
+      })
+      mgr3.run({ command: "true", description: "env target test", cwd: "/tmp", sessionID: "s" })
+      await waitFor(async () => spawnedArgs.length > 0)
+      expect(spawnedArgs[0]).toContain("-t")
+      expect(spawnedArgs[0][spawnedArgs[0].indexOf("-t") + 1]).toBe("%current")
+    } finally {
+      spawnSpy.mockRestore()
+      if (origTmux !== undefined) process.env.TMUX = origTmux
+      else delete process.env.TMUX
+      if (origPane !== undefined) process.env.TMUX_PANE = origPane
+      else delete process.env.TMUX_PANE
+    }
   })
 })

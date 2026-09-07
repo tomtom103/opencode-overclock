@@ -7,6 +7,7 @@
 
 - **Blocked By:** [TASK-XX, TASK-YY | None (Can start immediately)]
 - **Seam:** [File path to test file, e.g. tests/unit/auth-token.test.ts]
+- **Verification Tool:** [bash for fast unit checks (<3s) | task_run for suites/watchers/builds >5s | browser for UI]
 - **Deliverable:** The end-to-end behavior this task makes work from the caller's perspective.
 - **Acceptance Criteria:**
   - [ ] Automated test at seam fails before implementation (Red).

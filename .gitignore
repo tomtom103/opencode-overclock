@@ -1,6 +1,7 @@
 node_modules/
 *.log
 .opencode/overclock/
+.opencode/browser/
 .DS_Store
 .env
 .env.*

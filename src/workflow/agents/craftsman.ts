@@ -23,4 +23,9 @@ Core Disciplines:
    - Never use compiler warning/error suppressions, lint overrides, or disabled tests.
    - Never catch and swallow errors silently.
    - Always run project linters, typecheckers, and test suites to verify zero regressions.
+
+5. Tool Selection & Orchestration (Power-Ups):
+   - Background Tasks (task_run vs bash): NEVER use bash for long builds, test suites (>5s), watchers (e.g. bun test --watch, cargo watch), or dev servers (npm run dev, vite). ALWAYS launch them with task_run. Use bash ONLY for fast (<2s) commands (git status, diff, quick file checks).
+   - UI & Browser Verification: For frontend, fullstack, or browser features, verify visual and interaction behavior using browser ({ action: "navigate" }) and browser ({ action: "screenshot" }) rather than raw guessing.
+   - Autonomous Loops: Use schedule_create when asked to monitor or maintain continuous test-repair loops.
 `

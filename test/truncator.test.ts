@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { truncateOutput, truncator, DEFAULT_MAX_CHARS } from "../src/features/truncator.ts"
+import {
+  truncateOutput,
+  truncator,
+  DEFAULT_MAX_CHARS,
+  DEFAULT_TRUNCATABLE_TOOLS,
+} from "../src/features/truncator.ts"
 import { createBusyTracker } from "../src/lib/busy.ts"
 
 const shared = () => ({ busy: createBusyTracker(), toolName: (n: string) => n })
@@ -38,6 +43,36 @@ describe("truncator feature module", () => {
     expect(truncator.name).toBe("truncator")
     expect(truncator.defaultEnabled).toBe(true)
     expect(truncator.tools).toEqual([])
+    expect(DEFAULT_TRUNCATABLE_TOOLS).toContain("browser")
+    expect(DEFAULT_TRUNCATABLE_TOOLS).toContain("crawl")
+  })
+
+  test("truncates browser tool output by default", async () => {
+    const mod = await truncator.init({} as any, { maxChars: 100 }, shared())
+    const after = mod["tool.execute.after"]!
+
+    const output = {
+      title: "Browser",
+      output: Array.from({ length: 20 }, (_, i) => `browser line ${i} of long text`).join("\n"),
+      metadata: {},
+    }
+    await after({ tool: "browser", sessionID: "s1", callID: "c1", args: {} }, output)
+
+    expect(output.output).toContain("truncated")
+  })
+
+  test("truncates crawl tool output by default", async () => {
+    const mod = await truncator.init({} as any, { maxChars: 100 }, shared())
+    const after = mod["tool.execute.after"]!
+
+    const output = {
+      title: "Crawl",
+      output: Array.from({ length: 20 }, (_, i) => `crawl line ${i} of documentation map`).join("\n"),
+      metadata: {},
+    }
+    await after({ tool: "crawl", sessionID: "s1", callID: "c1", args: {} }, output)
+
+    expect(output.output).toContain("truncated")
   })
 
   test("truncates matching tool output", async () => {

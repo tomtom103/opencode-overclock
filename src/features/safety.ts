@@ -9,7 +9,7 @@ export interface DangerousPattern {
 }
 
 const GIT_PREFIX =
-  "\\bgit(?:\\s+(?:-[a-zA-Z0-9_.-]+|--[a-zA-Z0-9_.-]+(?:=\\S+)?|-[a-zA-Z]\\s+(?:\"[^\"]*\"|'[^']*'|\\S+)|--(?:git-dir|work-tree|namespace)\\s+(?:\"[^\"]*\"|'[^']*'|\\S+)))*\\s+"
+  "\\bgit(?:\\s+(?:-(?:C|c)\\s+(?:\"[^\"]*\"|'[^']*'|\\S+)|--(?:git-dir|work-tree|namespace)\\s+(?:\"[^\"]*\"|'[^']*'|\\S+)|-[^\\s;&|]+))*\\s+"
 
 export const DANGEROUS_GIT_PATTERNS: DangerousPattern[] = [
   {

@@ -19,6 +19,9 @@ Focus areas:
 5. Mocking Boundaries:
    - Are mocks restricted to external third-party boundaries (HTTP APIs, payment gateways)?
    - Flag any test mocking internal domain entities or the system under test.
+6. Tool Verification & QA Execution Strategy:
+   - For UI and web interaction verification, recommend browser automation (navigate, screenshot, console) and ui-verify rather than raw mock assertions.
+   - For long-running test suites or performance benchmarks, recommend task_run to avoid blocking the turn.
 
 Format findings:
 - [COVERAGE-GAP]: Critical missing test scenario or unexercised edge case.

@@ -21,4 +21,7 @@ Core Disciplines:
 4. Scope:
    - Focus exclusively on documentation files (Markdown, README, docs/, API specs).
    - Do not modify production application code or logic.
+
+5. Research Tools:
+   - When researching external upstream documentation or framework libraries, use \`webfetch\` (mode: "distill" or "outline") or \`crawl\` (format: "digest") rather than shallow web searches.
 `
