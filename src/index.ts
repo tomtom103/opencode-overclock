@@ -35,6 +35,7 @@ export const Overclock: HybridPlugin<OverclockOptions> = createHybridPlugin<Over
     const shared: SharedDeps = {
       busy: createBusyTracker(),
       toolName: (declared) => policy.rename[declared] ?? declared,
+      rename: policy.rename,
     }
     const parts: Partial<Hooks>[] = [{ event: async ({ event }) => shared.busy.onEvent(event) }]
     const skipped: string[] = []
@@ -96,6 +97,7 @@ export const Overclock: HybridPlugin<OverclockOptions> = createHybridPlugin<Over
   /** V2 lifecycle: domain transforms (agents, commands, catalog, aisdk) */
   setup: async (v2Context, pluginOptions) => {
     const options = (pluginOptions ?? {}) as OverclockOptions
+    const { policy } = resolveToolPolicy(options, features)
 
     for (const feature of features) {
       if (!feature.setup) continue
@@ -103,7 +105,7 @@ export const Overclock: HybridPlugin<OverclockOptions> = createHybridPlugin<Over
       if (opts === null) continue
 
       try {
-        await feature.setup(v2Context, opts)
+        await feature.setup(v2Context, opts, { policy, options })
       } catch (e) {
         console.warn(`[overclock] feature ${feature.name} failed v2 setup: ${e}`)
       }

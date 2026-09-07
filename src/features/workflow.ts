@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { FeatureModule, WorkflowOptions } from "../core/types.ts"
+import { renameInText } from "../core/policy.ts"
 import { DEFINE_TEMPLATE } from "../workflow/templates/define.ts"
 import { PLAN_TEMPLATE } from "../workflow/templates/plan.ts"
 import { BUILD_TEMPLATE } from "../workflow/templates/build.ts"
@@ -176,26 +177,59 @@ export const workflow: FeatureModule = {
   name: "workflow",
   defaultEnabled: true,
   tools: [],
-  async init(_ctx, options) {
+  async init(_ctx, options, shared) {
     const opts = (options ?? {}) as WorkflowOptions
     if (opts.enabled === false) {
       return {}
     }
 
+    const rename = shared?.rename ?? {}
     const skillsPath = getBundledSkillsDir(opts.skillsPath)
 
     return {
       config: async (cfg: any) => {
         if (opts.commands !== false) {
+          const remappedCommands = Object.fromEntries(
+            Object.entries(WORKFLOW_COMMANDS).map(([name, cmd]) => [
+              name,
+              {
+                ...cmd,
+                description: renameInText(cmd.description, rename),
+                template: renameInText(cmd.template, rename),
+              },
+            ]),
+          )
           cfg.command = {
-            ...WORKFLOW_COMMANDS,
+            ...remappedCommands,
             ...(cfg.command ?? {}),
           }
         }
 
         if (opts.subagents !== false) {
+          const remappedAgents = Object.fromEntries(
+            Object.entries(WORKFLOW_AGENTS).map(([id, ag]) => {
+              const tools =
+                "tools" in ag && ag.tools
+                  ? Object.fromEntries(
+                      Object.entries(ag.tools).map(([t, v]) => [
+                        shared?.toolName ? shared.toolName(t) : (rename[t] ?? t),
+                        v,
+                      ]),
+                    )
+                  : undefined
+              return [
+                id,
+                {
+                  ...ag,
+                  description: renameInText(ag.description, rename),
+                  prompt: renameInText(ag.prompt, rename),
+                  ...(tools ? { tools } : {}),
+                },
+              ]
+            }),
+          )
           cfg.agent = {
-            ...WORKFLOW_AGENTS,
+            ...remappedAgents,
             ...(cfg.agent ?? {}),
           }
         }
@@ -213,17 +247,23 @@ export const workflow: FeatureModule = {
     }
   },
 
-  setup: async (v2Context, options) => {
+  setup: async (v2Context, options, extra) => {
     const opts = (options ?? {}) as WorkflowOptions
     if (opts.enabled === false) return
+
+    const rename =
+      extra?.policy?.rename ??
+      (extra?.options?.toolNames as Record<string, string>) ??
+      ((options as any)?.toolNames as Record<string, string>) ??
+      {}
 
     if (opts.commands !== false && v2Context.command?.transform) {
       await v2Context.command.transform(async (draft) => {
         for (const [name, cmd] of Object.entries(WORKFLOW_COMMANDS)) {
           draft.update(name, (current) => {
             current.name = current.name ?? name
-            current.description = current.description ?? cmd.description
-            current.template = current.template ?? cmd.template
+            current.description = current.description ?? renameInText(cmd.description, rename)
+            current.template = current.template ?? renameInText(cmd.template, rename)
           })
         }
       })
@@ -234,8 +274,8 @@ export const workflow: FeatureModule = {
         for (const [id, ag] of Object.entries(WORKFLOW_AGENTS)) {
           draft.update(id, (current) => {
             current.mode = current.mode ?? ag.mode
-            current.description = current.description ?? ag.description
-            current.system = current.system ?? ag.prompt
+            current.description = current.description ?? renameInText(ag.description, rename)
+            current.system = current.system ?? renameInText(ag.prompt, rename)
             if ("permission" in ag && ag.permission?.edit === "deny") {
               const perms = (current.permissions as any[]) ?? []
               const hasDenyEdit = perms.some((p: any) => p.action === "edit" && p.effect === "deny")

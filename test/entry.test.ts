@@ -47,11 +47,19 @@ describe("Overclock entry", () => {
     expect(Object.keys(nestedHooks.tool ?? {})).not.toContain("task_run")
   })
 
-  test("toolNames option remaps tools", async () => {
+  test("toolNames option remaps tools and workflow prompts", async () => {
     const hooks = await Overclock(ctx(capableClient), { toolNames: { task_run: "custom_run" } })
     const tools = Object.keys(hooks.tool ?? {})
     expect(tools).toContain("custom_run")
     expect(tools).not.toContain("task_run")
+
+    // Verify workflow commands and agent prompts received the remapped tool name
+    const cfg: Record<string, any> = {}
+    await hooks.config?.(cfg)
+    expect(cfg.command?.plan?.template).toContain("custom_run")
+    expect(cfg.command?.plan?.template).not.toContain("`task_run`")
+    expect(cfg.agent?.craftsman?.prompt).toContain("custom_run")
+    expect(cfg.agent?.craftsman?.prompt).not.toContain("task_run")
   })
 
   test("first run reports the capabilities it added, once", async () => {

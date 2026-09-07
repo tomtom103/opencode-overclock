@@ -23,6 +23,10 @@ export interface SharedDeps {
    * remap the declared name is not a tool the model has.
    */
   toolName(declared: string): string
+  /**
+   * Complete dictionary of declared name -> remapped model-visible name.
+   */
+  rename?: Record<string, string>
 }
 
 /** A problem found in plugin configuration. */
@@ -189,7 +193,11 @@ export interface FeatureModule {
   /** V1 initialization: returns partial Hooks composed in registry order. */
   init(ctx: PluginInput, options: Record<string, unknown>, shared: SharedDeps): Promise<Partial<Hooks>>
   /** V2 setup: receives V2 PluginContext to register domain transforms. */
-  setup?(context: PluginContext, options: Record<string, unknown>): Promise<void> | void
+  setup?(
+    context: PluginContext,
+    options: Record<string, unknown>,
+    extra?: { policy?: ToolPolicy; options?: OverclockOptions },
+  ): Promise<void> | void
 }
 
 /**

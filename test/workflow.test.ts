@@ -212,4 +212,100 @@ describe("workflow feature module", () => {
     expect(cfg.skills.paths.length).toBeGreaterThan(0)
     expect(cfg.skills.paths[0]).toContain("skills")
   })
+
+  test("rewrites tool names in command templates and agent prompts when toolNames configured (V1)", async () => {
+    const remappedShared = {
+      busy: {} as any,
+      toolName: (n: string) =>
+        n === "task_run"
+          ? "custom_run"
+          : n === "browser"
+            ? "custom_browser"
+            : n === "edit"
+              ? "custom_edit"
+              : n,
+      rename: {
+        task_run: "custom_run",
+        browser: "custom_browser",
+        edit: "custom_edit",
+      },
+    }
+
+    const hooks = await workflow.init(fakeCtx, {}, remappedShared)
+    const cfg: Record<string, any> = {}
+    await hooks.config!(cfg)
+
+    // Plan template must mention remapped names and not old names
+    expect(cfg.command.plan.template).toContain("custom_run")
+    expect(cfg.command.plan.template).toContain("custom_browser")
+    expect(cfg.command.plan.template).not.toContain("`task_run`")
+
+    // Build template must mention remapped names and not old names
+    expect(cfg.command.build.template).toContain("custom_run")
+    expect(cfg.command.build.template).toContain("custom_browser")
+    expect(cfg.command.build.template).not.toContain("`task_run`")
+
+    // Diagnose template must mention remapped names and not old names
+    expect(cfg.command.diagnose.template).toContain("custom_run")
+    expect(cfg.command.diagnose.template).toContain("custom_browser")
+    expect(cfg.command.diagnose.template).not.toContain("`task_run`")
+
+    // Craftsman agent prompt must mention remapped names and not old names
+    expect(cfg.agent.craftsman.prompt).toContain("custom_run")
+    expect(cfg.agent.craftsman.prompt).toContain("custom_browser")
+    expect(cfg.agent.craftsman.prompt).not.toContain("task_run")
+
+    // Test-engineer agent prompt must mention remapped names
+    expect(cfg.agent["test-engineer"].prompt).toContain("custom_run")
+    expect(cfg.agent["test-engineer"].prompt).not.toContain("task_run")
+
+    // Read-only subagents must have remapped tool keys in tools sandbox
+    expect(cfg.agent["standards-reviewer"].tools).toEqual({
+      write: false,
+      custom_edit: false,
+    })
+  })
+
+  test("rewrites tool names in command templates and agent prompts in V2 setup", async () => {
+    const commands: Record<string, any> = {}
+    const agents: Record<string, any> = {}
+
+    const v2Context: any = {
+      command: {
+        transform: async (fn: any) => {
+          await fn({
+            update: (name: string, updater: any) => {
+              commands[name] = commands[name] ?? {}
+              updater(commands[name])
+            },
+          })
+        },
+      },
+      agent: {
+        transform: async (fn: any) => {
+          await fn({
+            update: (id: string, updater: any) => {
+              agents[id] = agents[id] ?? {}
+              updater(agents[id])
+            },
+          })
+        },
+      },
+    }
+
+    await workflow.setup!(v2Context, {}, {
+      policy: {
+        rename: { task_run: "custom_run", browser: "custom_browser" },
+        withheld: new Set(),
+      },
+    } as any)
+
+    expect(commands.plan.template).toContain("custom_run")
+    expect(commands.plan.template).toContain("custom_browser")
+    expect(commands.plan.template).not.toContain("`task_run`")
+
+    expect(agents.craftsman.system).toContain("custom_run")
+    expect(agents.craftsman.system).toContain("custom_browser")
+    expect(agents.craftsman.system).not.toContain("task_run")
+  })
 })
