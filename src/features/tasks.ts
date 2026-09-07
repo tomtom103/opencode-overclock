@@ -88,6 +88,8 @@ export interface TaskManager {
   output(id: string, tailLines?: number): Promise<string>
   kill(id: string): boolean
   killAll(): void
+  acknowledge(id: string): void
+  isAcknowledged(id: string): boolean
 }
 
 const strip = ({
@@ -175,6 +177,7 @@ export function createTaskManager(opts: {
   maxTasks?: number
 }): TaskManager {
   const tasks = new Map<string, TaskEntry>()
+  const acknowledged = new Set<string>()
   let counter = 0
   const maxRetainedTasks = opts.maxTasks ?? 100
 
@@ -188,7 +191,9 @@ export function createTaskManager(opts: {
     }
     const toRemove = tasks.size - maxRetainedTasks
     for (let i = 0; i < Math.min(toRemove, finished.length); i++) {
-      tasks.delete(finished[i]!)
+      const id = finished[i]!
+      tasks.delete(id)
+      acknowledged.delete(id)
     }
   }
 
@@ -342,6 +347,10 @@ export function createTaskManager(opts: {
     killAll: () => {
       for (const id of tasks.keys()) kill(id)
     },
+    acknowledge: (id: string) => {
+      acknowledged.add(id)
+    },
+    isAcknowledged: (id: string) => acknowledged.has(id),
   }
 }
 

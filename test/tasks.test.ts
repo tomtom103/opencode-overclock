@@ -107,6 +107,14 @@ describe("createTaskManager", () => {
     expect(entry?.description).toBe("mirrored")
     expect(typeof entry?.startedAt).toBe("number")
   })
+
+  test("tracks task acknowledgment", async () => {
+    const mgr = createTaskManager({ logDir: logDir() })
+    const t = mgr.run({ command: "true", description: "ack-test", cwd: "/tmp", sessionID: "s-ack" })
+    expect(mgr.isAcknowledged(t.id)).toBe(false)
+    mgr.acknowledge(t.id)
+    expect(mgr.isAcknowledged(t.id)).toBe(true)
+  })
 })
 
 describe("looksLikePrompt", () => {
